@@ -8,10 +8,14 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
    # be a valid R expression.
    # Produced RcppArmadillo code is returned as attr 'rcpp_code' of the result expression
    # if exec==FALSE, the RcppArmadillo code is not executed
-   # it is just returned as the result string.
+   # it is just returned as a vector of two strings. The first one
+   # is for creation of the matrix, the second one for its execution
+   # and setting variables in the calling environement.
+   # If exec==1, than only function creation is evaluated
+   # If exec==2, than the second code string is evaluated too.
    # If copy==TRUE then objects are created with memory copying.
-   # The calculations are made "in place" otherwise.
-   # The argument 'rebuild' is passed as is to cppFunction()
+   # The calculations are made "in place" otherwise (be carefull with that!).
+   # The argument 'rebuild' is passed through to cppFunction()
    # 'inpvars' is a vector of input variables. If NULL, it is
    # calculated from the variables appearing on the right had sides (RHS)
    # of assignements.
@@ -97,7 +101,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
          pada$text[iout]=paste("mat ", pada$text[iout], sep="")
       }
       # find inputs vars (RHS) for the current assignment
-      iend=if (i==length(ieq)) nrow(pada) else ieq[i+1]
+      iend=max(which(pada$line1<=pada$line2[it+1L] & pada$col1<=pada$col2[it+1L]))
       ins=sort(unique(pada$text[which(pada$id <= pada$id[iend] & pada$id >= pada$id[it] & pada$token=="SYMBOL")]))
       stopifnot(length(ins) > 0)
       # find ins that are not in previous outs neither in inps
@@ -119,6 +123,10 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
    # give names if needed
    if (is.null(names(outvars))) {
       names(outvars)=outvars
+   } else {
+      # if some names are empty, keep the value as name
+      i=nchar(names(outvars))==0
+      names(outvars)[i]=outvars[i]
    }
    if (!is.null(inpvars)) {
       # all inps must be in inpvars
@@ -166,53 +174,28 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
       paste('      Rcpp::Named("', names(outvars), '")=',
       outvars, sep='', collapse=",\n"))
    
-   code=sprintf("require(Rcpp)
-cppFunction(depends='RcppArmadillo', rebuild=%s,\n   'List %s(\n%s) {\n%s\n   }'\n)\n",
+   code1=sprintf("
+cppFunction(depends='RcppArmadillo', rebuild=%s,\n'List %s(\n%s) {\n%s\n   }'\n)\n",
       rebuild, fname, sig, body)
    # create function in the parent frame
    # call it in the parent frame
    # add code attribute
-   call_code=sprintf('%s\n%s.res<-%s(%s)\nattr(res, "rcpp_code")<-"%s"',
-      code, fname, fname, paste(inpvars, sep="", collapse=", "), gsub('"', '\\\\"', code))
-   if (exec) {
-      eval(parse(text=call_code))
+   code2=sprintf('%s.res<-%s(%s)\nattr(res, "rcpp_code")<-"%s"',
+      fname, fname, paste(inpvars, sep="", collapse=", "),
+      gsub('"', '\\\\"', code1))
+   if (isTRUE(exec)) {
+      eval(parse(text=code1), env=parent.frame())
+      eval(parse(text=code2))
       res=get(sprintf("%s.res", fname))
       # assign result vars
       for (it in names(res)) {
          assign(it, res[[it]], parent.frame())
       }
       return(res)
+   } else if (exec==1L) {
+      eval(parse(text=code1), env=parent.frame())
+      return(c(code1, code2))
    } else {
-      return(call_code)
+      return(c(code1, code2))
    }
-}
-fun2postfix=function(f, p, pada) {
-   # some calls must be translated to postfixes
-   # e.g. nrow(a) -> (a).n_rows
-   # In this example f is "nrow", p is ".n_rows"
-   # pada is parsed data which has to be modified and returned.
-   
-   i=which(pada$token=="SYMBOL_FUNCTION_CALL" & pada$text==f)
-   if (length(i) > 0) {
-      # get opening paranthesis
-      i=1L+sapply(i, function(ii) min(which(pada$id > pada$id[ii] &
-         pada$token=="'('")))
-      # get closing paranthesis
-      i=sapply(i, function(ii) min(which(pada$line1 >= pada$line2[ii] &
-         pada$col1 >= pada$col2[ii] & pada$token=="')'")))
-      # append the code
-      pada$text[i]=paste(pada$text[i], p, sep="")
-   }
-   return(pada)
-}
-# fastLm example
-require(MASS)
-y <- log(trees$Volume)
-X <- cbind(1, log(trees$Girth))
-fastLm_r=function(y, X) {
-   df=nrow(X)-ncol(X)
-   coef=qr.solve(X, y)
-   res=y-X%*%coef
-   s2=t(res)%*%res/df
-   std_err=sqrt(s2*diag(ginv(t(X)%*%X)))
 }
