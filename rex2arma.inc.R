@@ -127,27 +127,84 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
          return(c(d1[1L], d2[2L]))
       }
       return(symdim(st[[2]]))
+   } else if (any(s1 == c("sum", "prod"))) {
+      # reducing to scalar functions
+      return("1")
    } else {
       # we are not ready yet for all other cases
       return(NULL)
    }
 }
-fun2postfix=function(f, p, pada) {
-   # some calls must be translated to postfixes
-   # e.g. nrow(a) -> (a).n_rows
-   # In this example f is "nrow", p is ".n_rows"
-   # pada is parsed data which has to be modified and returned.
-   
-   i=which(pada$token=="SYMBOL_FUNCTION_CALL" & pada$text==f)
-   if (length(i) > 0) {
-      # get opening paranthesis
-      i=1L+sapply(i, function(ii) min(which(pada$id > pada$id[ii] &
-         pada$token=="'('")))
-      # get closing paranthesis
-      i=sapply(i, function(ii) min(which(pada$line1 >= pada$line2[ii] &
-         pada$col1 >= pada$col2[ii] & pada$token=="')'")))
-      # append the code
-      pada$text[i]=paste(pada$text[i], p, sep="")
+st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv", "diag"="diagvec"), ...) {
+   # Translate an R statement st (from a parsed expression) to RcppArmadillo
+   # code which is returned as a string
+   # Optional params '...' are passed to symdim.
+   if (is.symbol(st)) {
+      # just pass through
+      return(as.character(st))
    }
-   return(pada)
+   s1=as.character(st[[1]])
+   if (any(s1==c("*", "/", "+", "-")) && length(st)==3L) {
+      # plain binary operations term by term
+      # mat,vec operations '*'->'%'
+      if (s1 == "*" && symdim(st[[2L]], ...) != "1" && symdim(st[[3L]], ...) != "1") {
+         s1="%"
+      }
+      return(sprintf("%s%s%s", st2arma(st[[2L]]), s1, st2arma(st[[3L]])))
+   } else if (any(s1==c("%*%", crossprod, tcrossprod))) {
+      # dot products
+      a1=st2arma(st[[2L]])
+      d1=symdim(st[[2L]], ...)
+      l1=length(d1)
+      if (length(st) == 3L) {
+         a2=st2arma(st[[3L]])
+         d2=symdim(st[[3L]], ...)
+         l2=length(d2)
+      }
+      if (length(st) == 2L && s1=="crossprod") {
+         # just one arg for crossprod
+         a2=a1
+         a1=sprintf("(%s).t()", a1)
+         if (l1==1L) {
+            d2="1"
+            l2=1L
+            d1=c("1", d1)
+            l1=2L
+         } else {
+            d2=d1
+            l2=l1
+            d1=rev(d1)
+         }
+      } else if (length(st) == 2L && s1=="tcrossprod") {
+         # just one arg for tcrossprod
+         a2=sprintf("(%s).t()", a1)
+         if (l1==1L) {
+            d2=c("1", d1)
+            l2=2L
+         } else {
+            d2=rev(d1)
+            l2=l1
+         }
+      } else if (s1=="%*%" && l1==1L) {
+         # vec%*%smth, so decide vec.t() or not
+         if (l2==1L) {
+            # vec%*%vec
+            a1=sprintf("t(%s)", a1)
+         }
+      }
+      res=sprintf("%s*%s", a1, a2)
+      if (d1[1L] == "1" && (l2 == 1L || d2[2L]=="1")) {
+         # the result is a scalar
+         res=sprintf("as_scalar(%s)", res)
+      }
+      return(res)
+   } else if (any(s1 == names(call2arma))) {
+      # translate function names
+      args=sapply(st[2:length(st)], st2arma, call2arma, ...)
+      res=sprintf("%s(%s)", call2arma[s1], paste(args, collapse=", "))
+      return()
+   } else {
+      # by default return st "as is"
+      return(format(st))
+   }
 }
