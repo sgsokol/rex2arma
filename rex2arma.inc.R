@@ -17,7 +17,7 @@ fun2postfix=function(f, p, pada) {
    }
    return(pada)
 }
-symdim=function(st, env=parent.frame()) {
+symdim=function(st, dim_tab=NULL, env=parent.frame()) {
    # Get symbolic dimension of the result of an assignement statement in st
    # Statements are items in a list obtained as result of
    # e.g. quote(x=a+b)
@@ -27,7 +27,10 @@ symdim=function(st, env=parent.frame()) {
    # - a string "1" for a scalar
    # e.g. for a matrix a, symdim(a) should return c("nrow(a)", "ncol(a)")
    # If some error occurs, a NULL is returned
+   # The argument 'dim_tab' is a named list or env where object
+   # symbolic dimensions are retrieved from. 
    # The argument 'env' is where objects from the statement are searched for
+   # if dim_tab is NULL or an object is not there.
    #
    # Usage:
    # > lapply(parse(t="x=a%*%(b+c); y=a+b"), symdim)
@@ -74,17 +77,31 @@ symdim=function(st, env=parent.frame()) {
          # return the reversed dims of the first argument
          return(rev(d1))
       }
+   } else if (s1 == "%o%") {
+      # tensor product of two (normally) vectors
+      return(c(symdim(st[[2]], symdim(st[[3]]))))
    } else if (any(s1 == c("%*%", "crossprod", "tcrossprod"))) {
-      # return the dims by combyning two arguments
+      # return the dims by combyning nrow(arg1) and ncol(arg2)
       d1=symdim(st[[2]])
       l1=length(d1)
       if (length(st) > 2L) {
-        d2=symdim(st[[3]])
-        l2=length(d2)
+         d2=symdim(st[[3]])
+         l2=length(d2)
       } else {
          # crossprod or tcrossprod with only one argument
-         d2=d1?
-         l2=l1?
+         d2=d1
+         l2=l1
+      }
+      if (s1=="crossprod") {
+         d1=rev(d1) # first argument is transposed
+      } else if (s1=="tcrossprod") {
+         # second argument is transposed
+         if (l2 == 1L) {
+            d2=c("1", d2)
+            l2=2L
+         } else {
+            d2=rev(d2)
+         }
       }
       if (l1 == 1L && l2 == 1L) {
          # dot product of two vectors
@@ -98,8 +115,13 @@ symdim=function(st, env=parent.frame()) {
             return(d1[1L])
          }
       } else if (l1==1L && l2==2L) {
-         # dot product vec-mat (equivalent to t(vec)%*%mat)
-         return(c("1", d2[2L]))
+         # dot product vec-mat (equivalent to t(vec)%*%mat except when nrow(mat)==1)
+         if (d2[1L]=="1") {
+            # mat is just a t(vec)
+            return(c(d1, d2[2L]))
+         } else {
+            return(c("1", d2[2L]))
+         }
       } else {
          # mat-mat dot product
          return(c(d1[1L], d2[2L]))
@@ -110,14 +132,22 @@ symdim=function(st, env=parent.frame()) {
       return(NULL)
    }
 }
-# fastLm example
-require(MASS)
-y <- log(trees$Volume)
-X <- cbind(1, log(trees$Girth))
-fastLm_r=function(y, X) {
-   df=nrow(X)-ncol(X)
-   coef=qr.solve(X, y)
-   res=y-X%*%coef
-   s2=t(res)%*%res/df
-   std_err=sqrt(s2*diag(ginv(t(X)%*%X)))
+fun2postfix=function(f, p, pada) {
+   # some calls must be translated to postfixes
+   # e.g. nrow(a) -> (a).n_rows
+   # In this example f is "nrow", p is ".n_rows"
+   # pada is parsed data which has to be modified and returned.
+   
+   i=which(pada$token=="SYMBOL_FUNCTION_CALL" & pada$text==f)
+   if (length(i) > 0) {
+      # get opening paranthesis
+      i=1L+sapply(i, function(ii) min(which(pada$id > pada$id[ii] &
+         pada$token=="'('")))
+      # get closing paranthesis
+      i=sapply(i, function(ii) min(which(pada$line1 >= pada$line2[ii] &
+         pada$col1 >= pada$col2[ii] & pada$token=="')'")))
+      # append the code
+      pada$text[i]=paste(pada$text[i], p, sep="")
+   }
+   return(pada)
 }
