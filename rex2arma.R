@@ -34,22 +34,19 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
    # Limitations:
    # - expression must include only numeric matrices and vectors;
    # - no subscripting
-   # - no implicit vector recycling
+   # - no implicit vector recycling in terme-by-term operations
    # - no global assignement '<<-'; (but take care of operations that can be done in-place)
-   # - allowed operators and calls are: '+', '-', '*', '/', '%*%', t(),
-   #   [qr.]solve(), ginv(), diag() (which extracts its diagonal from a matrix)
-   #   and element-wise mathematical functions having the same syntaxe in R and Armadillo
-   #   like sqrt(), abs() etc.;
-   # - dot product of two vectors x%*%x maut be written as t(x)%*%x
-   # - there must be at least one assignement operator in the expression;
+   # - and last but not least, no garanty that produced code works as
+   #   expected even if it compiles without error
+   # Allowed operators and calls are:
+   #   binary: '+', '-', '*', '/', '%*%'
+   #   calls: t(), [qr.]solve(), ginv(), diag() (which extracts its diagonal from a matrix)
+   #   element-wise mathematical functions having the
+   #     same syntaxe in R and Armadillo: sqrt(), abs() etc.;
    
    # class translator
    class2arma=c("matrix"="mat", "numeric"="colvec", "integer"="colvec")
    class2rcpp=c("matrix"="NumericMatrix", "numeric"="NumericVector", "integer"="NumericVector")
-   # call translator
-   call2arma=c("%*%"="*", "*"="%", "qr.solve"="solve", "ginv"="pinv",
-      "t"="", "<-"="=", "nrow"="", "ncol"="", "diag"="diagvec"
-   )
    
    if (is.character(text)) {
       e=parse(text=text)
@@ -58,14 +55,6 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
       text=paste(sprintf("%s", e), collapse="; ")
    } else {
       stop("Argument 'text' must be a string with R code or an expression")
-   }
-   pada=getParseData(e) # parsed data
-   # check that a left assign is in the expression
-   stopifnot("LEFT_ASSIGN" %in% pada$token || "EQ_ASSIGN" %in% pada$token)
-   # check that no global assignement
-   i=pada$token=="LEFT_ASSIGN"
-   if (any(i) && pada$text[i]=="<<-") {
-      stop("A global assignement '<<-' is not admitted in expressions.")
    }
    
    vars=sort(unique(pada$text[pada$token=="SYMBOL"]))
@@ -175,7 +164,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
       outvars, sep='', collapse=",\n"))
    
    code1=sprintf("
-cppFunction(depends='RcppArmadillo', rebuild=%s,\n'List %s(\n%s) {\n%s\n   }'\n)\n",
+cppFunction(depends='RcppArmadillo', rebuild=%s,\n'List %s(\n%s) {\n%s\n}'\n)\n",
       rebuild, fname, sig, body)
    # create function in the parent frame
    # call it in the parent frame
