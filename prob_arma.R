@@ -79,23 +79,27 @@ y <- log(trees$Volume)
 X <- cbind(1, log(trees$Girth))
 fastLm_arma(y, X)
 #--------
-rm(fprob)
+rm(retvec)
 cppFunction(depends='RcppArmadillo', rebuild=T,
-'NumericVector fprob(
+'NumericVector retvec(
 arma::vec x) {
    using namespace arma;
    // Variable declarations
    //vec x(x_r_.begin(), x_r_.size(), false);
-   double d=2.;
    // Translated code starts here
-   
-   return wrap(x*d);
-   }'
+   double d=2.;
+   x*=d;
+   //std::vector<double> y(x.size()); // => OK
+   // y=conv_to< Rcpp:NumericVector >::from(x); // => error
+   //return Rcpp::as<NumericVector>(wrap(x)); // => 1-col matrix :(
+   //return wrap(x); // => 1-col matrix :(
+   return NumericVector(x.begin(), x.end()); // => OK
+}'
 )
-fprob(1:5)
+retvec(1:5)
 #---------
 cppFunction(depends='RcppArmadillo', rebuild=TRUE,
-   'List fastLm_rex(
+'List fastLm_rex(
 NumericMatrix X_r_,
 NumericVector y_r_) {
    using namespace arma;
@@ -117,5 +121,37 @@ NumericVector y_r_) {
       Rcpp::Named("df")=df
    );
 
-   }'
+}'
+)
+#---------------
+cppFunction(depends='RcppArmadillo', rebuild=TRUE,
+'SEXP renv() {
+   Environment glob(1);
+   arma::vec foo=NumericVector(glob.get("foo"));
+   Rcout << "foo+2=" << foo+2 << std::endl;
+   glob.assign("foo", 4);
+   return R_NilValue;
+}'
+)
+#---------------
+cppFunction(depends='RcppArmadillo', rebuild=TRUE,
+'NumericVector vecresize(arma::vec x, int n) {
+   x.resize(n);
+   return wrap(x);
+}'
+)
+#---------------
+cppFunction(depends='RcppArmadillo', rebuild=TRUE,
+'NumericVector crevec(arma::vec x, double n) {
+   //arma::vec y=arma::vec(n);
+   return wrap(arma::vec(n).fill(arma::as_scalar(x)));
+}'
+)
+#---------------
+cppFunction(depends='RcppArmadillo', rebuild=TRUE,
+'NumericVector cvec(arma::vec x, double y) {
+   //x = arma::join_cols(x, y, z);
+   x << y;
+   return wrap(x);
+}'
 )
