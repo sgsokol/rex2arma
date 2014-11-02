@@ -1,6 +1,6 @@
 require(Rcpp)
 cppFunction(depends='RcppArmadillo',
-   'List f(
+'List f(
 NumericVector res,
 NumericVector x) {
    using namespace arma;
@@ -16,8 +16,7 @@ NumericVector x) {
       Rcpp::Named("A")=A,
       Rcpp::Named("B")=B
    );
-
-   }'
+}'
 )
 
 require(Rcpp)
@@ -123,7 +122,7 @@ NumericVector y_r_) {
 
 }'
 )
-#---------------
+#---------------environements
 cppFunction(depends='RcppArmadillo', rebuild=TRUE,
 'SEXP renv() {
    Environment glob(1);
@@ -133,14 +132,14 @@ cppFunction(depends='RcppArmadillo', rebuild=TRUE,
    return R_NilValue;
 }'
 )
-#---------------
+#---------------resize a vec
 cppFunction(depends='RcppArmadillo', rebuild=TRUE,
 'NumericVector vecresize(arma::vec x, int n) {
    x.resize(n);
    return wrap(x);
 }'
 )
-#---------------
+#---------------create a vec from repeated scalar
 cppFunction(depends='RcppArmadillo', rebuild=TRUE,
 'NumericVector crevec(arma::vec x, double n) {
    //arma::vec y=arma::vec(n);
@@ -152,6 +151,12 @@ cppFunction(depends='RcppArmadillo', rebuild=TRUE,
 'NumericVector cvec(arma::vec x, double y) {
    //x = arma::join_cols(x, y, z);
    x << y;
+   return wrap(x);
+}'
+)
+#---------------return types
+cppFunction(depends='RcppArmadillo', rebuild=TRUE,
+'SEXP ret(arma::Mat<char> x) {
    return wrap(x);
 }'
 )
