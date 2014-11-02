@@ -1,5 +1,7 @@
 # 2014-10-27 sokol@insa-toulouse.fr
 # Licence of RcppArmadillo applies here
+# Copyright 2014, INRA, France
+
 source("rex2arma.inc.R")
 rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE, inpvars=NULL, outvars=NULL) {
    # parse a (simple) R expression from text argument then produce and
@@ -25,11 +27,11 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
    # be used to name list items.
    #
    # Usage:
-   # > a=diag(3); b=a; b[]=1:9; code=expr2arma("a=a+b", exec=F); cat(code);
+   # > a=diag(3); b=a; b[]=1:9; code=rex2arma("a=a+b", exec=F); cat(code);
    # to execute the produced code:
    # > eval(parse(text=code))
    # or simply
-   # > expr2arma("a=a+b") # the matrix a should be modified
+   # > rex2arma("a=a+b") # the matrix a should be modified
    
    # Limitations:
    # - expression must include only numeric matrices and vectors;
@@ -44,10 +46,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
    #   element-wise mathematical functions having the
    #     same syntaxe in R and Armadillo: sqrt(), abs() etc.;
    
-   # class translator
-   class2arma=c("matrix"="mat", "numeric"="colvec", "integer"="colvec")
-   class2rcpp=c("matrix"="NumericMatrix", "numeric"="NumericVector", "integer"="NumericVector")
-   
+   pfenv=parent.frame()
    if (is.character(text)) {
       e=parse(text=text)
    } else if (is.expression(text)) {
@@ -56,72 +55,102 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
    } else {
       stop("Argument 'text' must be a string with R code or an expression")
    }
-   
-   vars=sort(unique(pada$text[pada$token=="SYMBOL"]))
-   
-   # translate comments
-   i=pada$token=="COMMENT"
-   pada$text[i]=paste("//", substring(pada$text[i], 2), sep="")
-   
 #browser()
-   # special calls translations (nrow(), ncol())
-   pada=fun2postfix("nrow", ".n_rows", pada)
-   pada=fun2postfix("ncol", ".n_cols", pada)
-   pada=fun2postfix("t", ".t()", pada)
-   
-   # plainly translate R calls to arma calls ('<-' included)
-   i=pada$token %in% c("SYMBOL_FUNCTION_CALL", "SPECIAL", "'*'", "LEFT_ASSIGN")
-   pada$text[i]=sapply(pada$text[i], function(item) {res=call2arma[item]; if (is.na(res)) item else res})
-   pada$token[pada$token=="LEFT_ASSIGN"]="EQ_ASSIGN"
-   
-   ieq=which(pada$token=="EQ_ASSIGN")
    # make outs (to return to the caller) and inps (to be received from the caller)
-   # the first occurens of an out is prepended by 'mat ' declaration
+   # the first occurens of an out is prepended by 'mat ' or 'vec ' or 'double '
+   # declaration depending on the dim() of out
    outv=c()
    inps=c()
-   for (i in 1:length(ieq)) {
-      it=ieq[i]
-      # find result var (LHS) for the current assignment
-      iout=max(which(pada$id < pada$id[it] & pada$token=="SYMBOL"))
-      out=pada$text[iout]
-      stopifnot(length(out) == 1)
-      # prepend by 'mat '
-      if (! out %in% outv && ! out %in% inps) {
-         pada$text[iout]=paste("mat ", pada$text[iout], sep="")
+   code=""
+   ret=""
+   var_dims=list()
+   for (i in 1:length(e)) {
+      out="" # output var in this statement
+      s1="" # first item in st
+      prep="" # prepend by type mat, vec or double for first occurence in out
+      st=e[[i]] # current statement
+      if (is.symbol(st) || is.numeric(st) ||
+         as.character(s1 <- st[[1]])=="return" ||
+         (s1 != "=" && s1 != "<-")) {
+         # it must be the last statement before return
+         if (i != length(e)) {
+            stop(sprintf("Statement '%s' is not assignement and is not\nthe last one in the list"))
+         }
+         # prepare return
+         ret=st2arma(st, env=pfenv, dim_tab=var_dims)
+         if (s1 != "return") {
+            # return just the last expression (which is not "=" neither "<-")
+            ret=sprintf("return wrap(%s);\n", ret)
+         } else {
+            ret=sprintf("%s;\n", ret)
+         }
       }
-      # find inputs vars (RHS) for the current assignment
-      iend=max(which(pada$line1<=pada$line2[it+1L] & pada$col1<=pada$col2[it+1L]))
-      ins=sort(unique(pada$text[which(pada$id <= pada$id[iend] & pada$id >= pada$id[it] & pada$token=="SYMBOL")]))
-      stopifnot(length(ins) > 0)
-      # find ins that are not in previous outs neither in inps
+      if (s1 == "=" || s1 == "<-") {
+         # gather out var
+         out=as.character(st[[2L]])
+         outv=c(outv, out)
+         pada=getParseData(parse(t=format(st[-(1L:2L)])))
+      } else {
+         pada=getParseData(parse(t=format(st)))
+      }
+      # gather ins
+      ins=sort(unique(pada$text[pada$token=="SYMBOL"]))
+      for (it in setdiff(ins, names(var_dims))) {
+         # update var_dims
+         var_dims[[it]]=symdim(parse(t=it)[[1L]], var_dims, pfenv)
+      }
+      # prepend by 'mat ', 'vec ' or 'double '
+      if (out != "" && all(out != names(var_dims))) {
+         d1=symdim(st[[3]], var_dims)
+         var_dims[[out]]=d1
+         if (d1[1L] == "1") {
+            prep="double "
+         } else if (length(d1) == 1L) {
+            prep="vec "
+         } else {
+            prep="mat "
+         }
+      }
+#browser()
+      # hart part: add a line of cpp code
+      if (ret == "") {
+         code=sprintf("%s\n   %s%s;", code, prep, st2arma(st, env=pfenv, dim_tab=var_dims))
+      }
+      # store ins that are not in previous outs neither in inps
       di=setdiff(setdiff(ins, outv), inps)
       inps=c(inps, di)
-      outv=c(outv, out)
    }
-   # find output vars
-   outs=sort(unique(outv)) # output variables
-   if (is.null(outvars)) {
-      outvars=outs
-   } else {
-      # check that requested outvars are in outs
-      di=setdiff(outvars, outs)
-      if (length(di)) {
-         stop(sprintf("Requested output variables '%s' are not assigned in the ''", paste(di, collapse=", "), text))
+   if (ret == "") {
+      # prepare return if not yet done
+      # find output vars
+      outs=sort(unique(outv)) # output variables
+      if (is.null(outvars)) {
+         outvars=outs
+      } else {
+         # check that requested outvars are in outs
+         di=setdiff(outvars, outs)
+         if (length(di)) {
+            stop(sprintf("Requested output variables '%s' are not assigned in the ''", paste(di, collapse=", "), text))
+         }
       }
-   }
-   # give names if needed
-   if (is.null(names(outvars))) {
-      names(outvars)=outvars
-   } else {
-      # if some names are empty, keep the value as name
-      i=nchar(names(outvars))==0
-      names(outvars)[i]=outvars[i]
+      # give names if needed
+      if (is.null(names(outvars))) {
+         names(outvars)=outvars
+      } else {
+         # if some names are empty, keep the value as name
+         i=nchar(names(outvars))==0
+         names(outvars)[i]=outvars[i]
+      }
+      ret=sprintf("return List::create(\n%s\n   );\n",
+         paste('      Named("', names(outvars), '")=',
+         outvars, sep='', collapse=",\n"))
    }
    if (!is.null(inpvars)) {
       # all inps must be in inpvars
       di=setdiff(inps, inpvars)
       if (length(di)) {
-         stop(sprintf("The variables '%s' has to be in the inpvars", paste(di, sep=", ", collapse="")))
+         stop(sprintf("The variables '%s' has to be in the inpvars",
+            paste(di, collapse=", ")))
       }
       di=setdiff(inpvars, inps)
       if (length(di)) {
@@ -131,60 +160,46 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
       inpvars=inps
    }
    
-   # append ';' to the end of expression to the right from EQ_ASSIGN
-   iend=sapply(ieq+1L, function(i) max(which(pada$line2==pada$line2[i] & pada$col2==pada$col2[i])))
-   pada$text[iend]=paste(pada$text[iend], ";", sep="")
+   # gather rcpp code
+   inptype=sapply(inpvars, function(v) {
+      d=var_dims[[v]];
+      if (length(d)==2L) {
+         return(c("mat", "NumericMatrix"))
+      } else if (d == "1") {
+         return(c("double", "double"))
+      } else {
+         return(c("vec", "NumericVector"))
+      }
+   })
+   dim(inptype)=c(2L, length(inpvars))
+   rownames(inptype)=c("arma", "rcpp")
+   do_copy= if (copy) "true" else "false"
+   decl=ifelse(inptype["arma",]=="mat",
+      paste("   mat ", inpvars, "(", inpvars, "_in_.begin(), ", inpvars, "_in_.nrow(), ", inpvars, "_in_.ncol(), ", do_copy, ");", sep=""),
+      ifelse (inptype["arma",]=="vec", paste("   vec ", inpvars, "(", inpvars, "_in_.begin(), ",inpvars, "_in_.size(), ", do_copy, ");", sep=""),
+      paste("   double ",inpvars, "=", inpvars, "_in_;", sep=""))
+   )
    
-   # append '\n   ' to the end of rows
-   # (must be the last operation in pada$text modifications)
-   irows=sort(unique(pada$line1))
-   iend=sapply(irows, function(i) max(which(pada$line1==i)))
-   pada$text[iend]=paste(pada$text[iend], "\n   ", sep="")
-   
-   # prepare rcpp code
-   objs=lapply(inpvars, get, env=parent.frame(), mode="numeric")
-   class_r=sapply(objs, class)
-   class_arma=class2arma[class_r]
-   class_rcpp=class2rcpp[class_r]
-   size_arma=ifelse(class_r=="matrix", paste(inpvars, "_r_.nrow(), ",
-      inpvars, "_r_.ncol()", sep=""),  paste(inpvars, "_r_.size()", sep=""))
-   
-   sig=paste(class_rcpp, " ", inpvars, "_r_", sep="", collapse=",\n")
-   decl=paste("   ", class_arma, " ", inpvars, "(", inpvars, "_r_.begin(), ",
-      size_arma, ", ", if (copy) "true" else "false", ");",
-      sep="", collapse="\n")
+   sig=paste(inptype["rcpp",], " ", inpvars, "_in_", sep="", collapse=",\n")
    body=sprintf("   using namespace arma;
+   using namespace Rcpp;
    // Variable declarations
 %s
    // Translated code starts here
-   %s
-   return Rcpp::List::create(\n%s\n   );\n",
-      decl, paste(pada$text, sep="", collapse=""),
-      paste('      Rcpp::Named("', names(outvars), '")=',
-      outvars, sep='', collapse=",\n"))
+%s
    
-   code1=sprintf("
-cppFunction(depends='RcppArmadillo', rebuild=%s,\n'List %s(\n%s) {\n%s\n}'\n)\n",
+   %s", paste(decl, collapse="\n") , code, ret)
+   
+   code=sprintf("
+cppFunction(depends='RcppArmadillo', rebuild=%s,\n'SEXP %s(\n%s) {\n%s\n}'\n)\n",
       rebuild, fname, sig, body)
-   # create function in the parent frame
-   # call it in the parent frame
-   # add code attribute
-   code2=sprintf('%s.res<-%s(%s)\nattr(res, "rcpp_code")<-"%s"',
-      fname, fname, paste(inpvars, sep="", collapse=", "),
-      gsub('"', '\\\\"', code1))
    if (isTRUE(exec)) {
-      eval(parse(text=code1), env=parent.frame())
-      eval(parse(text=code2))
-      res=get(sprintf("%s.res", fname))
-      # assign result vars
-      for (it in names(res)) {
-         assign(it, res[[it]], parent.frame())
-      }
+      # create function in the parent frame
+      # call it with params from the parent frame
+      eval(parse(text=code), env=pfenv)
+      res=do.call(fname, lapply(inpvars, get, env=pfenv), env=pfenv)
       return(res)
-   } else if (exec==1L) {
-      eval(parse(text=code1), env=parent.frame())
-      return(c(code1, code2))
    } else {
-      return(c(code1, code2))
+      return(code)
    }
 }
