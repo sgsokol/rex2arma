@@ -1,26 +1,7 @@
-fun2postfix=function(f, p, pada) {
-   # some calls must be translated to postfixes
-   # e.g. nrow(a) -> (a).n_rows
-   # In this example f is "nrow", p is ".n_rows"
-   # pada is parsed data which has to be modified and returned.
-   
-   i=which(pada$token=="SYMBOL_FUNCTION_CALL" & pada$text==f)
-   if (length(i) > 0) {
-      # get opening paranthesis
-      i=1L+sapply(i, function(ii) min(which(pada$id > pada$id[ii] &
-         pada$token=="'('")))
-      # get closing paranthesis
-      i=sapply(i, function(ii) min(which(pada$line1 >= pada$line2[ii] &
-         pada$col1 >= pada$col2[ii] & pada$token=="')'")))
-      # append the code
-      pada$text[i]=paste(pada$text[i], p, sep="")
-   }
-   return(pada)
-}
 symdim=function(st, dim_tab=NULL, env=parent.frame()) {
-   # Get symbolic dimension of the result of an assignement statement in st
+   # Get symbolic dimension (as an R code) of a statement in st
    # Statements are items in a list obtained as result of
-   # e.g. quote(x=a+b)
+   # e.g. quote(a+b)
    # return a character vector:
    # - of legth 2 for a matrix, e.g. c("nrow(mat)", "ncol(mat)")
    # - of length 1 for a vector, e.g. "length(vec)"
@@ -35,40 +16,64 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
    # Usage:
    # > lapply(parse(t="x=a%*%(b+c); y=a+b"), symdim)
    # or simply
-   # > symdim(parse(t="x=a%*%(b+c)")[[1]])
+   # > symdim(parse(t="x=a%*%(b+c)")[[1L]])
+#browser()
    if (is.symbol(st)) {
       # we are ready to return the dim vector
       s1=as.character(st)
-      obj=get(s1, env=env)
-      cl=class(obj)
-      len=length(obj)
-      if (cl == "matrix") {
-         return(c(sprintf("nrow(%s)", s1), sprintf("ncol(%s)", s1)))
-      } else if (len == 1) {
-         return("1")
+      if (any(s1 == names(dim_tab))) {
+         # already known
+         return(dim_tab[[s1]])
       } else {
-         return(sprintf("length(%s)", s1))
+         obj=get(s1, env=env)
+         cl=class(obj)
+         len=length(obj)
+         if (cl == "matrix") {
+            return(c(sprintf("nrow(%s)", s1), sprintf("ncol(%s)", s1)))
+         } else if (len == 1) {
+            # to be cast a scalar, it is a vector who must be of length 1, not a matrix
+            return("1")
+         } else {
+            return(sprintf("length(%s)", s1))
+         }
       }
+   } else if (is.numeric(st)) {
+      # a plain number
+      return("1")
    }
-   s1=as.character(st[[1]])
-   t1=typeof(st[[1]])
-   m1=mode(st[[1]])
+   s1=as.character(st[[1L]])
+   t1=typeof(st[[1L]])
+   m1=mode(st[[1L]])
+   lenst=length(st)
    if (any(s1 == c("=", "<-"))) {
       # return the dims of the RHS
-      return(symdim(st[[3]]))
-   } else if (any(s1 == c("+", "-", "*", "/"))) {
-      # return the longest dim of all arguments
-      d1=symdim(st[[2]])
+      return(symdim(st[[3L]], dim_tab, env))
+   }
+   # dims af arguments
+   dims=lapply(st[-1], symdim, dim_tab, env)
+   if (any(s1 == c("+", "-", "*", "/")) && lenst == 3L) {
+#browser()
+      # return the longest dim of two arguments
+      d1=dims[[1L]]
       l1=length(d1)
-      d2=symdim(st[[3]])
+      d2=dims[[2L]]
       l2=length(d2)
       if (l2 > l1) {
          return(d2)
+      } else if (l1 > l2) {
+         return(d1)
+      } else if (l1 == 1L) {
+         # return the longest string
+         return(c(d2, d1)[(nchar(d1) >= nchar(d2))+1L])
       } else {
+         # two matrices => by default the first one
          return(d1)
       }
+   } else if (any(s1 == c("+", "-")) && lenst == 2L) {
+      # unary signs
+      return(dims[[1L]])
    } else if (any(s1 == c("t", "ginv"))) {
-      d1=symdim(st[[2]])
+      d1=dims[[1L]]
       l1=length(d1)
       if (l1 == 1L) {
          # transpose of a vector
@@ -79,13 +84,13 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
       }
    } else if (s1 == "%o%") {
       # tensor product of two (normally) vectors
-      return(c(symdim(st[[2]], symdim(st[[3]]))))
+      return(c(dims[[1L]], dims[[2L]]))
    } else if (any(s1 == c("%*%", "crossprod", "tcrossprod"))) {
       # return the dims by combyning nrow(arg1) and ncol(arg2)
-      d1=symdim(st[[2]])
+      d1=dims[[1L]]
       l1=length(d1)
-      if (length(st) > 2L) {
-         d2=symdim(st[[3]])
+      if (lenst > 2L) {
+         d2=dims[[2L]]
          l2=length(d2)
       } else {
          # crossprod or tcrossprod with only one argument
@@ -126,42 +131,84 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
          # mat-mat dot product
          return(c(d1[1L], d2[2L]))
       }
-      return(symdim(st[[2]]))
-   } else if (any(s1 == c("sum", "prod"))) {
+      return(dims[[1L]])
+   } else if (any(s1 == c("sum", "prod", "nrow", "ncol"))) {
       # reducing to scalar functions
       return("1")
+   } else if (s1 == "c") {
+      # sum of argument sizes
+      return(sprintf("%s", paste(sapply(dims, function(d) if (length(d) > 1L) paste(d, collapse="*") else d), collapse="+")))
+   } else if (any(s1 == c(":", "seq"))) {
+#browser()
+      # range size
+      if (s1 == ":" && format(st[[2L]] == format(st[[3L]]))) {
+         # identical begin and end => a scalar
+         return("1")
+      }
+      # otherwise a vector
+      return(sprintf("length(%s)", format(st)))
+   } else if (any(s1 == c("solve", "qr.solve"))) {
+      # dim of the solution of a linear system
+      dims[[lenst-1L]]
+   } else if (s1 == "diag") {
+      # the result may be vector, may be matrix
+      if (lenst == 2L && lenst[1L] == 2L) {
+         # vector
+         return(dims[[1L]][2L])
+      } else {
+         # matrix
+         alast=format(st[[lenst]])
+         return(c(alast, alast))
+      }
    } else {
-      # we are not ready yet for all other cases
-      return(NULL)
+      # by default we suppose that the function operates on each term of its first argument
+      return(dims[[1L]])
    }
 }
-st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv", "diag"="diagvec"), ...) {
+st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv"), ...) {
    # Translate an R statement st (from a parsed expression) to RcppArmadillo
    # code which is returned as a string
    # Optional params '...' are passed to symdim.
-   if (is.symbol(st)) {
+   if (is.symbol(st) || is.numeric(st)) {
       # just pass through
       return(as.character(st))
    }
-   s1=as.character(st[[1]])
-   if (any(s1==c("*", "/", "+", "-")) && length(st)==3L) {
+   s1=as.character(st[[1L]])
+   args=sapply(st[-1L], st2arma, call2arma, ...)
+   if (s1 == "=" || s1 == "<-") {
+      return(sprintf("%s=%s", args[1L], args[2L]))
+   }
+   dims=lapply(st[-1L], symdim, ...)
+   lens=sapply(dims, length)
+   lenst=length(st)
+#browser()
+   if (any(s1==c("*", "/", "+", "-")) && lenst == 3L) {
       # plain binary operations term by term
       # mat,vec operations '*'->'%'
-      if (s1 == "*" && symdim(st[[2L]], ...) != "1" && symdim(st[[3L]], ...) != "1") {
+      if (s1 == "*" && dims[[1L]][1L] != "1" && dims[[2L]][1L] != "1") {
          s1="%"
       }
-      return(sprintf("%s%s%s", st2arma(st[[2L]]), s1, st2arma(st[[3L]])))
-   } else if (any(s1==c("%*%", crossprod, tcrossprod))) {
+      return(sprintf("%s%s%s", args[1L], s1, args[2L]))
+   }
+   if (s1 == "+" || s1 == "-" && lenst == 2L) {
+      # unary operations
+      return(sprintf("%s%s", s1, args[1L]))
+   }
+   if (s1 == "(") {
+      # parenthesis operations
+      return(sprintf("(%s)", args[1L]))
+   }
+   if (any(s1==c("%*%", crossprod, tcrossprod))) {
       # dot products
-      a1=st2arma(st[[2L]])
-      d1=symdim(st[[2L]], ...)
-      l1=length(d1)
-      if (length(st) == 3L) {
-         a2=st2arma(st[[3L]])
-         d2=symdim(st[[3L]], ...)
-         l2=length(d2)
+      a1=args[1L]
+      d1=dims[[1L]]
+      l1=lens[1L]
+      if (lenst == 3L) {
+         a2=args[2L]
+         d2=dims[[2L]]
+         l2=lens[2L]
       }
-      if (length(st) == 2L && s1=="crossprod") {
+      if (lenst == 2L && s1=="crossprod") {
          # just one arg for crossprod
          a2=a1
          a1=sprintf("(%s).t()", a1)
@@ -175,7 +222,7 @@ st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv", "diag"="diag
             l2=l1
             d1=rev(d1)
          }
-      } else if (length(st) == 2L && s1=="tcrossprod") {
+      } else if (lenst == 2L && s1=="tcrossprod") {
          # just one arg for tcrossprod
          a2=sprintf("(%s).t()", a1)
          if (l1==1L) {
@@ -189,7 +236,7 @@ st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv", "diag"="diag
          # vec%*%smth, so decide vec.t() or not
          if (l2==1L) {
             # vec%*%vec
-            a1=sprintf("t(%s)", a1)
+            return(sprintf("sum((%s)%%(%s))", a1, a2))
          }
       }
       res=sprintf("%s*%s", a1, a2)
@@ -198,13 +245,60 @@ st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv", "diag"="diag
          res=sprintf("as_scalar(%s)", res)
       }
       return(res)
+   } else if (s1 == "diag") {
+      if (lenst == 2L) {
+         # only one argument
+         a1=args[1L]
+         l1=lens[1L]
+         if (dims[[1L]][1L] == "1") {
+            # a scalar argument =>
+            # create an identity matrix of size arg1
+            return(sprintf("eye<mat>(%s, %s)", a1, a1))
+         } else if (l1 == 1L) {
+            # a vector argument
+            # create a diagonal matrix with the vector on the main diagonal
+            return(sprintf("diagmat(%s)", a1))
+         } else if (l1 == 2L) {
+            # a matrix argument
+            # extract the main diagonal to a vector
+            return(sprintf("diagvec(%s)", a1))
+         }
+      } else if (lenst == 3L) {
+         # two arguments
+         a1=args[1L]
+         l1=lens[1L]
+         a2=args[2L]
+         l2=lens[2L]
+         if (dims[[1L]][1L] == "1") {
+            # first scalar argument =>
+            # create a diagonal matrix of size arg2 and filled with arg1
+            return(sprintf("diagmat(vec(as_scalar(%s)).fill(as_scalar(%s)))", a2, a1))
+         } else if (lens[1L] == 1L) {
+            # first vector argument
+            # create a diagonal matrix with the vector on the main diagonal
+            return(sprintf("diagmat(%s)", a1))
+         } else if (lens[1L] == 2L) {
+            # first matrix argument =>
+            # error, it cannot be
+            stop("If a matrix is the first argument to diag(), the second arguments is meaningless.")
+         }
+      }
    } else if (any(s1 == names(call2arma))) {
-      # translate function names
-      args=sapply(st[2:length(st)], st2arma, call2arma, ...)
+      # simply translate function names
       res=sprintf("%s(%s)", call2arma[s1], paste(args, collapse=", "))
-      return()
+      return(res)
+   } else if (s1 == "nrow") {
+      return(sprintf("(%s).n_rows", args[1L]))
+   } else if (s1 == "ncol") {
+      return(sprintf("(%s).n_cols", args[1L]))
+   } else if (s1 == "t") {
+      return(sprintf("(%s).t()", args[1L]))
+   } else if (s1 == "list") {
+      nms=names(st[-1L])
+      nms=ifelse(nchar(nms), sprintf('Named("%s")=', nms), nms)
+      return(sprintf("List::create(%s)", paste(nms, args, sep="", collapse=", ")))
    } else {
-      # by default return st "as is"
-      return(format(st))
+      # by default return st as a function call
+      return(sprintf("%s(%s)", s1, paste(args, collapse=", ")))
    }
 }
