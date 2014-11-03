@@ -1,59 +1,101 @@
-# 2014-10-27 sokol@insa-toulouse.fr
+# 2014-11-03
+# Author: Serguei Sokol, sokol@insa-toulouse.fr
 # Licence of RcppArmadillo applies here
 # Copyright 2014, INRA, France
 
 source("rex2arma.inc.R")
-rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE, inpvars=NULL, outvars=NULL) {
-   # parse a (simple) R expression from text argument then produce and
-   # optionally execute corresponding RcppArmadillo inline code.
+rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL) {
+   # translate a (simple) R code (or a string having a code or an expression
+   # or a function) to RcppArmadillo inline code using cppFunction().
+   # It optionally executes the generated RcppArmadillo function.
    # If the parameter text is a string it is parsed. If not, it must
-   # be a valid R expression.
-   # Produced RcppArmadillo code is returned as attr 'rcpp_code' of the result expression
+   # be a valid R expression or a function or a plain code.
    # if exec==FALSE, the RcppArmadillo code is not executed
-   # it is just returned as a vector of two strings. The first one
-   # is for creation of the matrix, the second one for its execution
-   # and setting variables in the calling environement.
-   # If exec==1, than only function creation is evaluated
-   # If exec==2, than the second code string is evaluated too.
-   # If copy==TRUE then objects are created with memory copying.
-   # The calculations are made "in place" otherwise (be carefull with that!).
+   # it is just returned as a string.
+   # If exec==1, the function is created but not executed.
+   # If exec==2 or TRUE, than the function is called too and its output
+   # is returned as the result of rex2arma() call.
+   # If copy==TRUE, objects inside the cpp code are created with memory copying.
+   # If copy==FLASE, the calculations are made "in place"
+   # (be carefull with that! The side effects can be very surprising).
    # The argument 'rebuild' is passed through to cppFunction()
    # 'inpvars' is a vector of input variables. If NULL, it is
    # calculated from the variables appearing on the right had sides (RHS)
-   # of assignements.
+   # of assignements. If parameter 'text' is a function, the argument list is taken
+   # from that function and inpvars is not consulted.
    # 'outvars' is a vector of variable names that must be returned in the
    # result list. If NULL, all variables that appear on the left hand side (LHS)
    # will be returned. If the vector outvars is named, than names will
-   # be used to name list items.
+   # be used to name list items. If parameter 'text' is a function,
+   # the output is taken from it and outvars is not consulted.
    #
    # Usage:
-   # > a=diag(3); b=a; b[]=1:9; code=rex2arma("a=a+b", exec=F); cat(code);
+   # > a=1:3; b=a+3; # NB. the input parameters must be defined before a call to rex2arma()
+   # as a text:
+   # > code=rex2arma("a+b", exec=F)
+   # > cat(code);
+   # as a function
+   # > f=function(a, b) a+b
+   # > code=rex2arma(f, exec=F)
+   # as an R code
+   # > code=rex2arma(a+b, exec=F) # NB. a+b is not executed in R,
+   # # (even is passed as an argument to rex2arma()) but only in the cpp compiled code
+   # or
+   # > code=rex2arma({x=a+b; y=a-b}, exec=F) # NB. a+b etc. is not executed in R
+   # as an expression
+   # > e=parse(text="{x=a+b; y=a-b}")
+   # > code=rex2arma(e, exec=F)
    # to execute the produced code:
-   # > eval(parse(text=code))
+   # > (result=eval(parse(text=code)))
    # or simply
-   # > rex2arma("a=a+b") # the matrix a should be modified
+   # > (result=rex2arma("a+b"))
    
    # Limitations:
    # - expression must include only numeric matrices and vectors;
    # - no subscripting
    # - no implicit vector recycling in terme-by-term operations
+   # - no code control with if, for, while etc.
    # - no global assignement '<<-'; (but take care of operations that can be done in-place)
    # - and last but not least, no garanty that produced code works as
    #   expected even if it compiles without error
    # Allowed operators and calls are:
-   #   binary: '+', '-', '*', '/', '%*%'
+   #   binary: '+', '-', '*', '/', '%*%', '%o%'
    #   calls: t(), [qr.]solve(), ginv(), diag() (which extracts its diagonal from a matrix)
+   #          nrow(), ncol()
    #   element-wise mathematical functions having the
    #     same syntaxe in R and Armadillo: sqrt(), abs() etc.;
-   
+#browser()
    pfenv=parent.frame()
-   if (is.character(text)) {
+   e=substitute(text)
+   if (is.symbol(e)) {
+      e=eval(e, env=pfenv)
+   }
+   if (is.character(e)) {
       e=parse(text=text)
-   } else if (is.expression(text)) {
-      e=text
-      text=paste(sprintf("%s", e), collapse="; ")
-   } else {
-      stop("Argument 'text' must be a string with R code or an expression")
+   }
+   if (is.function(e)) {
+      inpvars=names(formals(e))
+      e=body(e)
+      if (class(e) == "{") {
+         e=e[-1L]
+      } else {
+         e=list(e)
+      }
+   }
+   if (is.name(e[[1L]]) && e[[1L]]!=as.symbol("{")) {
+      e=list(e)
+   }
+   # else if (is.expression(text) || is.call(text) || is.call(text[[1L]])) {
+   #   e=text
+   #} else {
+   #   stop("Argument 'text' must be a string with R code or an expression")
+   #}
+   if (e[[1L]]==as.symbol("{")) {
+      if (is.expression(e)) {
+         e=e[[1L]][-1L]
+      } else {
+         e=e[-1L]
+      }
    }
 #browser()
    # make outs (to return to the caller) and inps (to be received from the caller)
@@ -74,7 +116,8 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
          (s1 != "=" && s1 != "<-")) {
          # it must be the last statement before return
          if (i != length(e)) {
-            stop(sprintf("Statement '%s' is not assignement and is not\nthe last one in the list"))
+#browser()
+            stop(sprintf("Statement '%s' is not assignement and is not\nthe last one in the list", st))
          }
          # prepare return
          ret=st2arma(st, env=pfenv, dim_tab=var_dims)
@@ -187,18 +230,20 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=FALSE, rebuild=FALSE,
 %s
    // Translated code starts here
 %s
-   
    %s", paste(decl, collapse="\n") , code, ret)
    
    code=sprintf("
 cppFunction(depends='RcppArmadillo', rebuild=%s,\n'SEXP %s(\n%s) {\n%s\n}'\n)\n",
       rebuild, fname, sig, body)
-   if (isTRUE(exec)) {
+   if (isTRUE(exec) || exec==2L) {
       # create function in the parent frame
       # call it with params from the parent frame
       eval(parse(text=code), env=pfenv)
       res=do.call(fname, lapply(inpvars, get, env=pfenv), env=pfenv)
       return(res)
+   } else if (exec == 1L) {
+      eval(parse(text=code), env=pfenv)
+      return(code)
    } else {
       return(code)
    }
