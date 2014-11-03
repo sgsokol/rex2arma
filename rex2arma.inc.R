@@ -1,3 +1,8 @@
+# 2014-11-03
+# Author: Serguei Sokol, sokol@insa-toulouse.fr
+# Licence of RcppArmadillo applies here
+# Copyright 2014, INRA, France
+
 symdim=function(st, dim_tab=NULL, env=parent.frame()) {
    # Get symbolic dimension (as an R code) of a statement in st
    # Statements are items in a list obtained as result of
@@ -165,7 +170,8 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
       return(dims[[1L]])
    }
 }
-st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv"), ...) {
+
+st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv", "^"="pow"), ...) {
    # Translate an R statement st (from a parsed expression) to RcppArmadillo
    # code which is returned as a string
    # Optional params '...' are passed to symdim.
@@ -234,9 +240,9 @@ st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv"), ...) {
          }
       } else if (s1=="%*%" && l1==1L) {
          # vec%*%smth, so decide vec.t() or not
-         if (l2==1L) {
+         if (l2==1L && d1[1L] != "1" && d2[1L] != "1") {
             # vec%*%vec
-            return(sprintf("sum((%s)%%(%s))", a1, a2))
+            return(sprintf("dot(%s, %s)", a1, a2))
          }
       }
       res=sprintf("%s*%s", a1, a2)
@@ -293,8 +299,24 @@ st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv"), ...) {
       return(sprintf("(%s).n_cols", args[1L]))
    } else if (s1 == "t") {
       return(sprintf("(%s).t()", args[1L]))
+   } else if (s1 == "%o%") {
+      if (lens[[1L]] == 1 && dims[[1L]] == "1") {
+         # first argument is a scalar
+         if (!(lens[[2L]] == 1 && dims[[2L]] == "1")) {
+            return(sprintf("%s*(%s).t()", args[1L], args[2L]))
+         } else {
+            return(sprintf("(%s)*(%s)", args[1L], args[2L]))
+         }
+      } else if (lens[[2L]] == 1 && dims[[2L]] == "1") {
+         # the second argument is a scalar
+         return(sprintf("%s*%s", args[1L], args[2L]))
+      }
+      # all other cases
+      return(sprintf("kron(vectorise(%s), vectorise(%s).t())", args[1L], args[2L]))
+   } else if (any(s1 == c("c", "as.numeric", "as.double"))) {
+      return(sprintf("vectorise(%s)", args[1L]))
    } else if (s1 == "list") {
-      nms=names(st[-1L])
+       nms=names(st[-1L])
       nms=ifelse(nchar(nms), sprintf('Named("%s")=', nms), nms)
       return(sprintf("List::create(%s)", paste(nms, args, sep="", collapse=", ")))
    } else {
