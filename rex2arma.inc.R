@@ -30,7 +30,7 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
          # already known
          return(dim_tab[[s1]])
       } else {
-         obj=get(s1, env=env)
+         obj=get(s1, mode="numeric", env=env)
          cl=class(obj)
          len=length(obj)
          if (cl == "matrix") {
@@ -171,24 +171,66 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
    }
 }
 
-st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv", "^"="pow"), ...) {
+st2arma=function(
+st,
+call2arma=c("qr.solve"="solve", "ginv"="pinv", "^"="pow"),
+indent="",
+known=NULL,
+...) {
    # Translate an R statement st (from a parsed expression) to RcppArmadillo
-   # code which is returned as a string
-   # Optional params '...' are passed to symdim.
+   # code which is returned as a string.
+   # For nested blocks in curved brackets "{...}", indent is incremented.
+   # NB. newly declarated variables in these block are not visible outside them.
+   # Parameters in ... are passed to symdim().
    if (is.symbol(st) || is.numeric(st)) {
+      s1=as.character(st)
+      if (s1 == "T") {
+         return("true")
+      } else if (s1 == "F") {
+         return("false")
+      }
       # just pass through
-      return(as.character(st))
+      return(s1)
+   }
+   if (isTRUE(st)) {
+      return("true")
+   }
+   if (is.logical(st) && isTRUE(!st)) {
+      return("false")
    }
    s1=as.character(st[[1L]])
-   args=sapply(st[-1L], st2arma, call2arma, ...)
+   args=sapply(st[-1L], st2arma, call2arma, indent, known, ...)
    if (s1 == "=" || s1 == "<-") {
-      return(sprintf("%s=%s", args[1L], args[2L]))
+      # prepending by 'mat ', 'vec' or 'double '
+      if (! args[1L] %in% known) {
+         d=symdim(st[[3]], ...)
+         len=length(d)
+         if (len > 1L) {
+            prep="mat "
+         } else if (d == "1") {
+            prep="double "
+         } else {
+            prep="vec "
+         }
+      }
+      return(sprintf("%s%s%s=%s;\n", indent, prep, args[1L], args[2L]))
+   }
+   if (s1 == "if") {
+      res=sprintf("%sif (%s) %s", indent, args[1L], args[2L])
+      if (length(args) == 3L) {
+         res=sprintf("%s else %s", res, args[3L])
+      }
+      return(sprintf("%s\n", res))
+   }
+   if (s1 == "{") {
+      return(sprintf("{\n%s%s}", 
+         paste(sprintf("%s   ", indent), args, collapse=""), indent))
    }
    dims=lapply(st[-1L], symdim, ...)
    lens=sapply(dims, length)
    lenst=length(st)
 #browser()
-   if (any(s1==c("*", "/", "+", "-")) && lenst == 3L) {
+   if (any(s1==c("*", "/", "+", "-", ">", "<", ">=", "<=", "==", "!=", "&&", "||")) && lenst == 3L) {
       # plain binary operations term by term
       # mat,vec operations '*'->'%'
       if (s1 == "*" && dims[[1L]][1L] != "1" && dims[[2L]][1L] != "1") {
@@ -294,18 +336,28 @@ st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv", "^"="pow"), 
       res=sprintf("%s(%s)", call2arma[s1], paste(args, collapse=", "))
       return(res)
    } else if (s1 == "nrow") {
+      if (is.symbol(st[[2]])) {
+         return(sprintf("%s.n_rows", args[1L]))
+      }
       return(sprintf("(%s).n_rows", args[1L]))
    } else if (s1 == "ncol") {
+      if (is.symbol(st[[2]])) {
+         return(sprintf("%s.n_cols", args[1L]))
+      }
       return(sprintf("(%s).n_cols", args[1L]))
    } else if (s1 == "t") {
+      if (is.symbol(st[[2]])) {
+         return(sprintf("%s.t()", args[1L]))
+      }
       return(sprintf("(%s).t()", args[1L]))
    } else if (s1 == "%o%") {
+#browser()
       if (lens[[1L]] == 1 && dims[[1L]] == "1") {
          # first argument is a scalar
          if (!(lens[[2L]] == 1 && dims[[2L]] == "1")) {
-            return(sprintf("%s*(%s).t()", args[1L], args[2L]))
+            return(sprintf("%s*%s.t()", args[1L], args[2L]))
          } else {
-            return(sprintf("(%s)*(%s)", args[1L], args[2L]))
+            return(sprintf("%s*%s", args[1L], args[2L]))
          }
       } else if (lens[[2L]] == 1 && dims[[2L]] == "1") {
          # the second argument is a scalar
@@ -316,9 +368,12 @@ st2arma=function(st, call2arma=c("qr.solve"="solve", "ginv"="pinv", "^"="pow"), 
    } else if (any(s1 == c("c", "as.numeric", "as.double"))) {
       return(sprintf("vectorise(%s)", args[1L]))
    } else if (s1 == "list") {
-       nms=names(st[-1L])
+#browser()
+      nms=names(st[-1L])
       nms=ifelse(nchar(nms), sprintf('Named("%s")=', nms), nms)
-      return(sprintf("List::create(%s)", paste(nms, args, sep="", collapse=", ")))
+      # convert vec in args to NumericVector
+      argconv=sapply(seq_along(args), function(i) if (lens[i] > 1L || dims[[i]][1L]=="1") args[i] else sprintf("NumericVector(%s.begin(), %s.end())", args[i], args[i]))
+      return(sprintf("List::create(%s)", paste(nms, argconv, sep="", collapse=", ")))
    } else {
       # by default return st as a function call
       return(sprintf("%s(%s)", s1, paste(args, collapse=", ")))

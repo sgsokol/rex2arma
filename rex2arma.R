@@ -54,7 +54,8 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    # - expression must include only numeric matrices and vectors;
    # - no subscripting
    # - no implicit vector recycling in terme-by-term operations
-   # - no code control with if, for, while etc.
+   # - no loops for, while etc.
+   # - symbols "T" and "F" are converted to "true" and "false"
    # - no global assignement '<<-'; (but take care of operations that can be done in-place)
    # - and last but not least, no garanty that produced code works as
    #   expected even if it compiles without error
@@ -99,33 +100,33 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    }
 #browser()
    # make outs (to return to the caller) and inps (to be received from the caller)
-   # the first occurens of an out is prepended by 'mat ' or 'vec ' or 'double '
+   # the first occurens of an out is prepended by 'mat ' or 'vec ' or 'double ' in st2arma()
    # declaration depending on the dim() of out
    outv=c()
    inps=c()
    code=""
    ret=""
    var_dims=list()
+   indent="   "
    for (i in 1:length(e)) {
       out="" # output var in this statement
       s1="" # first item in st
-      prep="" # prepend by type mat, vec or double for first occurence in out
       st=e[[i]] # current statement
       if (is.symbol(st) || is.numeric(st) ||
          as.character(s1 <- st[[1]])=="return" ||
-         (s1 != "=" && s1 != "<-")) {
+         (s1 != "=" && s1 != "<-" && s1 != "if")) {
          # it must be the last statement before return
          if (i != length(e)) {
 #browser()
-            stop(sprintf("Statement '%s' is not assignement and is not\nthe last one in the list", st))
+            stop(sprintf("Statement '%s' is not assignement. It mus be the last one in the list", st))
          }
          # prepare return
-         ret=st2arma(st, env=pfenv, dim_tab=var_dims)
+         ret=st2arma(st, indent=indent, known=known, env=pfenv, dim_tab=var_dims)
          if (s1 != "return") {
             # return just the last expression (which is not "=" neither "<-")
-            ret=sprintf("return wrap(%s);\n", ret)
+            ret=sprintf("%sreturn wrap(%s);\n", indent, ret)
          } else {
-            ret=sprintf("%s;\n", ret)
+            ret=sprintf("%s%s;\n", indent, ret)
          }
       }
       if (s1 == "=" || s1 == "<-") {
@@ -142,22 +143,16 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
          # update var_dims
          var_dims[[it]]=symdim(parse(t=it)[[1L]], var_dims, pfenv)
       }
-      # prepend by 'mat ', 'vec ' or 'double '
-      if (out != "" && all(out != names(var_dims))) {
-         d1=symdim(st[[3]], var_dims)
-         var_dims[[out]]=d1
-         if (d1[1L] == "1") {
-            prep="double "
-         } else if (length(d1) == 1L) {
-            prep="vec "
-         } else {
-            prep="mat "
-         }
-      }
+      known=names(var_dims)
 #browser()
       # hart part: add a line of cpp code
       if (ret == "") {
-         code=sprintf("%s\n   %s%s;", code, prep, st2arma(st, env=pfenv, dim_tab=var_dims))
+         code=sprintf("%s%s", code, st2arma(st, indent=indent, known=known, env=pfenv, dim_tab=var_dims))
+      }
+      if (out != "" && ! out %in% known) {
+         d1=symdim(st[[3L]], var_dims)
+         var_dims[[out]]=d1
+         known=c(known, out)
       }
       # store ins that are not in previous outs neither in inps
       di=setdiff(setdiff(ins, outv), inps)
@@ -184,9 +179,24 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
          i=nchar(names(outvars))==0
          names(outvars)[i]=outvars[i]
       }
-      ret=sprintf("return List::create(\n%s\n   );\n",
+      outtype=sapply(outvars, function(v) {
+         d=var_dims[[v]];
+         if (length(d)==2L) {
+            return(c("mat", "NumericMatrix"))
+         } else if (d == "1") {
+            return(c("double", "double"))
+         } else {
+            return(c("vec", "NumericVector"))
+         }
+      })
+      dim(outtype)=c(2L, length(outvars))
+      rownames(outtype)=c("arma", "rcpp")
+      # colvec to vector conversion
+#browser()
+      outconv=ifelse(outtype=="vec", sprintf("NumericVector(%s.begin(), %s.end())", outvars, outvars), outvars)
+      ret=sprintf("%sreturn List::create(\n%s\n   );\n", indent,
          paste('      Named("', names(outvars), '")=',
-         outvars, sep='', collapse=",\n"))
+         outconv, sep='', collapse=",\n"))
    }
    if (!is.null(inpvars)) {
       # all inps must be in inpvars
@@ -230,7 +240,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
 %s
    // Translated code starts here
 %s
-   %s", paste(decl, collapse="\n") , code, ret)
+%s", paste(decl, collapse="\n") , code, ret)
    
    code=sprintf("
 cppFunction(depends='RcppArmadillo', rebuild=%s,\n'SEXP %s(\n%s) {\n%s\n}'\n)\n",
