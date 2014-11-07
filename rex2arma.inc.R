@@ -30,7 +30,7 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
          # already known
          return(dim_tab[[s1]])
       } else {
-         obj=get(s1, mode="numeric", env=env)
+         obj=eval(st, env=env)
          cl=class(obj)
          len=length(obj)
          if (cl == "matrix") {
@@ -42,7 +42,8 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
             return(sprintf("length(%s)", s1))
          }
       }
-   } else if (is.numeric(st)) {
+   }
+   if (is.numeric(st) || is.logical(st) || is.character(st)) {
       # a plain number
       return("1")
    }
@@ -56,6 +57,7 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
    }
    # dims af arguments
    dims=lapply(st[-1], symdim, dim_tab, env)
+   lens=sapply(dims, length)
    if (any(s1 == c("+", "-", "*", "/")) && lenst == 3L) {
 #browser()
       # return the longest dim of two arguments
@@ -74,10 +76,12 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
          # two matrices => by default the first one
          return(d1)
       }
-   } else if (any(s1 == c("+", "-")) && lenst == 2L) {
+   }
+   if (any(s1 == c("+", "-")) && lenst == 2L) {
       # unary signs
       return(dims[[1L]])
-   } else if (any(s1 == c("t", "ginv"))) {
+   }
+   if (any(s1 == c("t", "ginv"))) {
       d1=dims[[1L]]
       l1=length(d1)
       if (l1 == 1L) {
@@ -87,10 +91,12 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
          # return the reversed dims of the first argument
          return(rev(d1))
       }
-   } else if (s1 == "%o%") {
+   }
+   if (s1 == "%o%") {
       # tensor product of two (normally) vectors
       return(c(dims[[1L]], dims[[2L]]))
-   } else if (any(s1 == c("%*%", "crossprod", "tcrossprod"))) {
+   }
+   if (any(s1 == c("%*%", "crossprod", "tcrossprod"))) {
       # return the dims by combyning nrow(arg1) and ncol(arg2)
       d1=dims[[1L]]
       l1=length(d1)
@@ -122,7 +128,7 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
             # mat is just a t(vec)
             return("1")
          } else {
-            return(d1[1L])
+            return(c(d1[1L], "1"))
          }
       } else if (l1==1L && l2==2L) {
          # dot product vec-mat (equivalent to t(vec)%*%mat except when nrow(mat)==1)
@@ -137,25 +143,23 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
          return(c(d1[1L], d2[2L]))
       }
       return(dims[[1L]])
-   } else if (any(s1 == c("sum", "prod", "nrow", "ncol"))) {
+   }
+   if (any(s1 == c("sum", "prod", "nrow", "ncol"))) {
       # reducing to scalar functions
       return("1")
-   } else if (s1 == "c") {
+   }
+   if (s1 == "dim") {
+      return(lens[1L])
+   }
+   if (s1 == "c") {
       # sum of argument sizes
       return(sprintf("%s", paste(sapply(dims, function(d) if (length(d) > 1L) paste(d, collapse="*") else d), collapse="+")))
-   } else if (any(s1 == c(":", "seq"))) {
-#browser()
-      # range size
-      if (s1 == ":" && format(st[[2L]] == format(st[[3L]]))) {
-         # identical begin and end => a scalar
-         return("1")
-      }
-      # otherwise a vector
-      return(sprintf("length(%s)", format(st)))
-   } else if (any(s1 == c("solve", "qr.solve"))) {
+   }
+   if (any(s1 == c("solve", "qr.solve"))) {
       # dim of the solution of a linear system
-      dims[[lenst-1L]]
-   } else if (s1 == "diag") {
+      return(dims[[lenst-1L]])
+   }
+   if (s1 == "diag" || s1 == "Diagonal") {
       # the result may be vector, may be matrix
       if (lenst == 2L && lenst[1L] == 2L) {
          # vector
@@ -165,17 +169,46 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
          alast=format(st[[lenst]])
          return(c(alast, alast))
       }
-   } else {
-      # by default we suppose that the function operates on each term of its first argument
-      return(dims[[1L]])
    }
+   
+   # data/code control
+   if (any(s1 == c(":", "seq"))) {
+#browser()
+      # range size
+      if (s1 == ":" && format(st[[2L]]) == format(st[[3L]])) {
+         # identical begin and end => a scalar
+         return("1")
+      }
+      # otherwise a vector
+      return(sprintf("length(%s)", format(st)))
+   }
+   if (s1 == "[") {
+      # indexing operator => the longest dims
+      if (max(lens[-1L]) > 1L) {
+         # index is matrix
+         i=which.max(lens[-1L])
+         return(sprintf("nrow(%s)", args[i+1L]))
+      }
+      # vector index(es) of vector or matrix?
+      if (lens[1L] > 1L) {
+         # getting submatrix
+         if (dims[[2L]] == "1" && dims[[3L]] == "1") {
+            return("1")
+         }
+         return(c(dims[[2L]], dims[[3L]]))
+      }
+      # getting subvector
+      return(dims[[2L]])
+   }
+   
+   # by default we suppose that the function operates on each term of its first argument
+   return(dims[[1L]])
 }
 
 st2arma=function(
 st,
 call2arma=c("qr.solve"="solve", "ginv"="pinv", "^"="pow"),
 indent="",
-known=NULL,
 ...) {
    # Translate an R statement st (from a parsed expression) to RcppArmadillo
    # code which is returned as a string.
@@ -199,24 +232,16 @@ known=NULL,
       return("false")
    }
    s1=as.character(st[[1L]])
-   args=sapply(st[-1L], st2arma, call2arma, indent, known, ...)
+   if (is.character(st)) {
+      return(sprintf('"%s"', gsub('"', '\\\\"', s1)))
+   }
+#browser()
+   args=sapply(st[-1L], st2arma, call2arma, indent, ...)
    if (s1 == "=" || s1 == "<-") {
-      # prepending by 'mat ', 'vec' or 'double '
-      if (! args[1L] %in% known) {
-         d=symdim(st[[3]], ...)
-         len=length(d)
-         if (len > 1L) {
-            prep="mat "
-         } else if (d == "1") {
-            prep="double "
-         } else {
-            prep="vec "
-         }
-      }
-      return(sprintf("%s%s%s=%s;\n", indent, prep, args[1L], args[2L]))
+      return(sprintf("%s%s=%s;\n", indent, args[1L], args[2L]))
    }
    if (s1 == "if") {
-      res=sprintf("%sif (%s) %s", indent, args[1L], args[2L])
+      res=sprintf("%sif (%s) %s;", indent, args[1L], args[2L])
       if (length(args) == 3L) {
          res=sprintf("%s else %s", res, args[3L])
       }
@@ -230,6 +255,8 @@ known=NULL,
    lens=sapply(dims, length)
    lenst=length(st)
 #browser()
+   
+   # binary (bilateral) operations
    if (any(s1==c("*", "/", "+", "-", ">", "<", ">=", "<=", "==", "!=", "&&", "||")) && lenst == 3L) {
       # plain binary operations term by term
       # mat,vec operations '*'->'%'
@@ -237,14 +264,6 @@ known=NULL,
          s1="%"
       }
       return(sprintf("%s%s%s", args[1L], s1, args[2L]))
-   }
-   if (s1 == "+" || s1 == "-" && lenst == 2L) {
-      # unary operations
-      return(sprintf("%s%s", s1, args[1L]))
-   }
-   if (s1 == "(") {
-      # parenthesis operations
-      return(sprintf("(%s)", args[1L]))
    }
    if (any(s1==c("%*%", crossprod, tcrossprod))) {
       # dot products
@@ -293,7 +312,72 @@ known=NULL,
          res=sprintf("as_scalar(%s)", res)
       }
       return(res)
-   } else if (s1 == "diag") {
+   }
+   if (s1 == "%o%") {
+#browser()
+      if (lens[[1L]] == 1 && dims[[1L]] == "1") {
+         # first argument is a scalar
+         if (!(lens[[2L]] == 1 && dims[[2L]] == "1")) {
+            return(sprintf("%s*%s.t()", args[1L], args[2L]))
+         } else {
+            return(sprintf("%s*%s", args[1L], args[2L]))
+         }
+      } else if (lens[[2L]] == 1 && dims[[2L]] == "1") {
+         # the second argument is a scalar
+         return(sprintf("%s*%s", args[1L], args[2L]))
+      }
+      # all other cases
+      return(sprintf("kron(vectorise(%s), vectorise(%s).t())", args[1L], args[2L]))
+   }
+   
+   # unary operations
+   if (s1 == "+" || s1 == "-" && lenst == 2L) {
+      return(sprintf("%s%s", s1, args[1L]))
+   }
+   
+   # data/code control
+   if (s1 == "(") {
+      # parenthesis operations
+      return(sprintf("(%s)", args[1L]))
+   }
+   if (s1 == "[") {
+      # indexing operations, decrement by 1
+      return(sprintf("%s.at(%s)", args[1L], paste(sprintf("%s-1", args[-1L]), collapse=", ")))
+   }
+   if (s1 == ":") {
+      # sequence operations
+      return(sprintf("span(%s, %s)", args[1L], args[2L]))
+   }
+   if (s1 == "for") {
+      if (as.character(st[[3L]][[1L]]) == ":") {
+         # Here only integer counter on integer range "begin:end" will work
+         begend=sapply(st[[3L]][-1L], st2arma, call2arma, indent, ...)
+         counter=args[1L]
+         return(sprintf("%sfor (int %s=%s; %s <= %s; ++%s) %s\n",
+            indent, counter, begend[1L], counter, begend[2L], counter, args[3L]))
+      }
+   }
+   if (s1 == "return") {
+      return(sprintf("return wrap(%s)", args[1L]))
+   }
+   if (s1 %in% c("c", "as.numeric", "as.double") && lens[1L] > 1L) {
+      return(sprintf("vectorise(%s)", args[1L]))
+   }
+   if (s1 == "c" && all(lens == 1L) && all(unlist(dims)=="1")) {
+      # scalars are put in a vector
+      return(sprintf("vec(NumericVector::create(%s))", paste(args, collapse=", ")))
+   }
+   if (s1 == "list") {
+#browser()
+      nms=names(st[-1L])
+      nms=ifelse(nchar(nms), sprintf('Named("%s")=', nms), nms)
+      # convert vec in args to NumericVector
+      argconv=sapply(seq_along(args), function(i) if (lens[i] > 1L || dims[[i]][1L]=="1") args[i] else sprintf("NumericVector(%s.begin(), %s.end())", args[i], args[i]))
+      return(sprintf("List::create(%s)", paste(nms, argconv, sep="", collapse=", ")))
+   }
+   
+   # mono argument functions
+   if (s1 == "diag") {
       if (lenst == 2L) {
          # only one argument
          a1=args[1L]
@@ -331,51 +415,42 @@ known=NULL,
             stop("If a matrix is the first argument to diag(), the second arguments is meaningless.")
          }
       }
-   } else if (any(s1 == names(call2arma))) {
-      # simply translate function names
-      res=sprintf("%s(%s)", call2arma[s1], paste(args, collapse=", "))
-      return(res)
-   } else if (s1 == "nrow") {
+   }
+   if (s1 == "nrow") {
       if (is.symbol(st[[2]])) {
          return(sprintf("%s.n_rows", args[1L]))
       }
       return(sprintf("(%s).n_rows", args[1L]))
-   } else if (s1 == "ncol") {
+   }
+   if (s1 == "ncol") {
       if (is.symbol(st[[2]])) {
          return(sprintf("%s.n_cols", args[1L]))
       }
       return(sprintf("(%s).n_cols", args[1L]))
-   } else if (s1 == "t") {
+   }
+   if (s1 == "dim") {
+      return(sprintf("vec(NumericVector::create(%s.n_rows, %s.n_cols))", args[1L], args[1L]))
+   }
+   if (s1 == "length") {
+      return("%s.size()")
+   }
+   if (s1 == "which.max") {
+      return(sprintf("((%s).max(isca1), isca1+1)"))
+   }
+   if (s1 == "which.min") {
+      return(sprintf("((%s).min(isca1), isca1+1)"))
+   }
+   if (s1 == "t") {
       if (is.symbol(st[[2]])) {
          return(sprintf("%s.t()", args[1L]))
       }
       return(sprintf("(%s).t()", args[1L]))
-   } else if (s1 == "%o%") {
-#browser()
-      if (lens[[1L]] == 1 && dims[[1L]] == "1") {
-         # first argument is a scalar
-         if (!(lens[[2L]] == 1 && dims[[2L]] == "1")) {
-            return(sprintf("%s*%s.t()", args[1L], args[2L]))
-         } else {
-            return(sprintf("%s*%s", args[1L], args[2L]))
-         }
-      } else if (lens[[2L]] == 1 && dims[[2L]] == "1") {
-         # the second argument is a scalar
-         return(sprintf("%s*%s", args[1L], args[2L]))
-      }
-      # all other cases
-      return(sprintf("kron(vectorise(%s), vectorise(%s).t())", args[1L], args[2L]))
-   } else if (any(s1 == c("c", "as.numeric", "as.double"))) {
-      return(sprintf("vectorise(%s)", args[1L]))
-   } else if (s1 == "list") {
-#browser()
-      nms=names(st[-1L])
-      nms=ifelse(nchar(nms), sprintf('Named("%s")=', nms), nms)
-      # convert vec in args to NumericVector
-      argconv=sapply(seq_along(args), function(i) if (lens[i] > 1L || dims[[i]][1L]=="1") args[i] else sprintf("NumericVector(%s.begin(), %s.end())", args[i], args[i]))
-      return(sprintf("List::create(%s)", paste(nms, argconv, sep="", collapse=", ")))
-   } else {
-      # by default return st as a function call
-      return(sprintf("%s(%s)", s1, paste(args, collapse=", ")))
    }
+   if (any(s1 == names(call2arma))) {
+      # simply translate function names
+      res=sprintf("%s(%s)", call2arma[s1], paste(args, collapse=", "))
+      return(res)
+   }
+   # by default return st as a function call
+   return(sprintf("%s(%s)", s1, paste(args, collapse=", ")))
 }
