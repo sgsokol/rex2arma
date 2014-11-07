@@ -65,6 +65,21 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    #          nrow(), ncol()
    #   element-wise mathematical functions having the
    #     same syntaxe in R and Armadillo: sqrt(), abs() etc.;
+   #
+   # Code conventions:
+   # R variables are considered as one of the following type (typeof(var) -> Rcpp; arma)
+   # (-"- means that the type has no its own equivalent in arma and kept as in Rcpp):
+   # - list -> List; -"-
+   # - character -> std::string; -"-
+   # - numeric -> double; -"-
+   # - integer -> int; sword
+   # - function -> Function; -"-
+   # - logical -> int; bool
+   # Depending on dimension of {numeric, integer, character, logical} variable
+   # it can be one the following structures in Rcpp/arma:
+   # - c++ scalar/c++ scalar
+   # - {Numeric,Integer,Complex,Character}Vector/{vec,ivec,cx_vec,-"-}
+   # - {Numeric,Integer,Complex,Character}Matrix/{mat,imat,cx_mat,-"-}
 #browser()
    pfenv=parent.frame()
    e=substitute(text)
@@ -109,7 +124,8 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    var_dims=list()
    indent="   "
    for (i in 1:length(e)) {
-      out="" # output var in this statement
+      out=c() # output var in this statement
+      ins=c() # input vars -"-
       s1="" # first item in st
       st=e[[i]] # current statement
       if (is.symbol(st) || is.numeric(st) ||
@@ -117,11 +133,10 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
          (s1 != "=" && s1 != "<-" && s1 != "if")) {
          # it must be the last statement before return
          if (i != length(e)) {
-#browser()
             stop(sprintf("Statement '%s' is not assignement. It mus be the last one in the list", st))
          }
          # prepare return
-         ret=st2arma(st, indent=indent, known=known, env=pfenv, dim_tab=var_dims)
+         ret=st2arma(st, indent=indent, env=pfenv, dim_tab=var_dims)
          if (s1 != "return") {
             # return just the last expression (which is not "=" neither "<-")
             ret=sprintf("%sreturn wrap(%s);\n", indent, ret)
@@ -129,34 +144,42 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
             ret=sprintf("%s%s;\n", indent, ret)
          }
       }
-      if (s1 == "=" || s1 == "<-") {
-         # gather out var
-         out=as.character(st[[2L]])
-         outv=c(outv, out)
-         pada=getParseData(parse(t=format(st[-(1L:2L)])))
-      } else {
-         pada=getParseData(parse(t=format(st)))
-      }
-      # gather ins
-      ins=sort(unique(pada$text[pada$token=="SYMBOL"]))
-      for (it in setdiff(ins, names(var_dims))) {
-         # update var_dims
-         var_dims[[it]]=symdim(parse(t=it)[[1L]], var_dims, pfenv)
-      }
-      known=names(var_dims)
 #browser()
-      # hart part: add a line of cpp code
+      pada=getParseData(parse(t=format(st)))
+      ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN")
+      # gather out vars (because of "if" and "for" blocks, it may be many
+      for (i in ieq) {
+         out=pada$text[pada$id == pada$id[i]-1L]
+         irhs=pada$line1 >= pada$line1[i+1L] &
+            pada$col1 >= pada$col1[i+1L] &
+            pada$line1 <= pada$line2[i+1L] &
+            pada$col1 <= pada$col2[i+1L]
+         # gather ins
+         ins=sort(unique(pada$text[pada$token=="SYMBOL" & irhs]))
+         # gather ins
+         for (it in setdiff(ins, names(var_dims))) {
+            # update var_dims
+            var_dims[[it]]=symdim(parse(t=it)[[1L]], var_dims, pfenv)
+         }
+         known=names(var_dims)
+         outv=c(outv, out)
+         if (! out %in% known) {
+            rhs=paste(pada$text[irhs], collapse="")
+            d1=symdim(parse(t=rhs)[[1L]], var_dims)
+            var_dims[[out]]=d1
+            known=c(known, out)
+            code=sprintf("%s%s%s %s;\n", code, indent,
+               if (length(d1) > 1L) "mat" else if (d1 == "1") "double" else "vec", out)
+         }
+         # store ins that are not in previous outs neither in inps
+         di=setdiff(setdiff(ins, outv), inps)
+         inps=c(inps, di)
+      }
+#browser()
+      # hart part: add a line of cpp code preceded by declarations
       if (ret == "") {
-         code=sprintf("%s%s", code, st2arma(st, indent=indent, known=known, env=pfenv, dim_tab=var_dims))
+         code=sprintf("%s%s", code, st2arma(st, indent=indent, env=pfenv, dim_tab=var_dims))
       }
-      if (out != "" && ! out %in% known) {
-         d1=symdim(st[[3L]], var_dims)
-         var_dims[[out]]=d1
-         known=c(known, out)
-      }
-      # store ins that are not in previous outs neither in inps
-      di=setdiff(setdiff(ins, outv), inps)
-      inps=c(inps, di)
    }
    if (ret == "") {
       # prepare return if not yet done
@@ -227,15 +250,23 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    dim(inptype)=c(2L, length(inpvars))
    rownames(inptype)=c("arma", "rcpp")
    do_copy= if (copy) "true" else "false"
-   decl=ifelse(inptype["arma",]=="mat",
-      paste("   mat ", inpvars, "(", inpvars, "_in_.begin(), ", inpvars, "_in_.nrow(), ", inpvars, "_in_.ncol(), ", do_copy, ");", sep=""),
-      ifelse (inptype["arma",]=="vec", paste("   vec ", inpvars, "(", inpvars, "_in_.begin(), ",inpvars, "_in_.size(), ", do_copy, ");", sep=""),
-      paste("   double ",inpvars, "=", inpvars, "_in_;", sep=""))
-   )
-   
-   sig=paste(inptype["rcpp",], " ", inpvars, "_in_", sep="", collapse=",\n")
-   body=sprintf("   using namespace arma;
+   if (length(inpvars)) {
+      decl=ifelse(inptype["arma",]=="mat",
+         paste("   mat ", inpvars, "(", inpvars, "_in_.begin(), ", inpvars, "_in_.nrow(), ", inpvars, "_in_.ncol(), ", do_copy, ");", sep=""),
+         ifelse (inptype["arma",]=="vec", paste("   vec ", inpvars, "(", inpvars, "_in_.begin(), ",inpvars, "_in_.size(), ", do_copy, ");", sep=""),
+         paste("   double ",inpvars, "=", inpvars, "_in_;", sep=""))
+      )
+
+      sig=paste(inptype["rcpp",], " ", inpvars, "_in_", sep="", collapse=",\n")
+   } else {
+      decl=sig=""
+   }
+   body=sprintf("
+   using namespace arma;
    using namespace Rcpp;
+   // auxiliary variables
+   uword isca1, isca2;
+   uvec  ivec1, ivec2;
    // Variable declarations
 %s
    // Translated code starts here
