@@ -72,9 +72,10 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    # - list -> List; -"-
    # - character -> std::string; -"-
    # - numeric -> double; -"-
+   # - double -> double; -"-"
    # - integer -> int; sword
    # - function -> Function; -"-
-   # - logical -> int; bool
+   # - logical -> Logical; -"-
    # Depending on dimension of {numeric, integer, character, logical} variable
    # it can be one the following structures in Rcpp/arma:
    # - c++ scalar/c++ scalar
@@ -82,6 +83,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    # - {Numeric,Integer,Complex,Character}Matrix/{mat,imat,cx_mat,-"-}
 #browser()
    pfenv=parent.frame()
+   probenv=new.env() # execute statements here to probe typeof(out)
    e=substitute(text)
    if (is.symbol(e)) {
       e=eval(e, env=pfenv)
@@ -122,6 +124,10 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    code=""
    ret=""
    var_dims=list()
+   var_typeof=matrix(NA, nrow=0, ncol=3)
+   colnames(var_typeof)=c("r", "rcpp", "arma")
+   var_decl=matrix(NA, nrow=0, ncol=2)
+   colnames(var_decl)=c("rcpp", "arma")
    indent="   "
    for (i in 1:length(e)) {
       out=c() # output var in this statement
@@ -146,37 +152,72 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
       }
 #browser()
       pada=getParseData(parse(t=format(st)))
-      ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN")
+      ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN" |
+         pada$token=="IN")
       # gather out vars (because of "if" and "for" blocks, it may be many
       for (i in ieq) {
          out=pada$text[pada$id == pada$id[i]-1L]
-         irhs=pada$line1 >= pada$line1[i+1L] &
-            pada$col1 >= pada$col1[i+1L] &
-            pada$line1 <= pada$line2[i+1L] &
-            pada$col1 <= pada$col2[i+1L]
+         irhs=(pada$line2[i+1L]==pada$line1[i+1L] &
+            pada$line1 == pada$line1[i+1L] &
+            pada$col1 <= pada$col2[i+1L] &
+            pada$col1 >= pada$col1[i+1L]) |
+            (pada$line2[i+1] > pada$line1[i+1] &
+            ((pada$line1==pada$line1[i+1] &
+            pada$col1 >= pada$col1[i+1]) |
+            (pada$line1 > pada$line1[i+1L] &
+            pada$line1 < pada$line2[i+1L]) |
+            (pada$line1 == pada$line2[i+1L] &
+            pada$col1 <= pada$col2[i+1L])))
          # gather ins
-         ins=sort(unique(pada$text[pada$token=="SYMBOL" & irhs]))
-         # gather ins
-         for (it in setdiff(ins, names(var_dims))) {
-            # update var_dims
-            var_dims[[it]]=symdim(parse(t=it)[[1L]], var_dims, pfenv)
+         isy=which(pada$token=="SYMBOL" & irhs)
+         # exclude $smth symbols
+         idol=which(irhs & pada$token=="'$'")
+         if (length(idol)) {
+            idol=apply(outer(isy, idol, `-`), 2L, function(v) which.max(v > 0L))
+            isy=isy[-idol]
          }
-         known=names(var_dims)
+         
+         ins=sort(unique(pada$text[isy]))
+         # get typeof and declaration ins
+         for (it in setdiff(ins, rownames(var_decl))) {
+            # update var_typeof
+            if (it %in% outv) {
+               var_typeof=rbind(var_typeof, get_vartype(it, probenv))
+            } else {
+               var_typeof=rbind(var_typeof, get_vartype(it, pfenv))
+            }
+            rownames(var_typeof)[nrow(var_typeof)]=it
+            # update var_dims
+            var_dims[[it]]=symdim(as.symbol(it), var_dims, pfenv)
+            # update var_decl
+            var_decl=rbind(var_decl, get_decl(it, var_typeof, var_dims))
+            rownames(var_decl)[nrow(var_decl)]=it
+         }
+         known=rownames(var_decl)
          outv=c(outv, out)
          if (! out %in% known) {
-            rhs=paste(pada$text[irhs], collapse="")
-            d1=symdim(parse(t=rhs)[[1L]], var_dims)
-            var_dims[[out]]=d1
+#browser()
+            rhs=paste(pada$text[irhs], collapse=" ")
+            # probe R exec
+            if (pada$token[i] == "IN") {
+               # for "for" loop take just first element
+               eval(parse(t=sprintf("%s=head(%s, 1L)", out, rhs)), env=probenv)
+            } else {
+               eval(parse(t=sprintf("%s=%s", out, rhs)), env=probenv)
+            }
+            var_typeof=rbind(var_typeof, get_vartype(out, probenv))
+            rownames(var_typeof)[nrow(var_typeof)]=out
+            var_dims[[out]]=symdim(as.symbol(out), var_dims, env=probenv)
+            var_decl=rbind(var_decl, get_decl(out, var_typeof, var_dims))
+            rownames(var_decl)[nrow(var_decl)]=out
             known=c(known, out)
-            code=sprintf("%s%s%s %s;\n", code, indent,
-               if (length(d1) > 1L) "mat" else if (d1 == "1") "double" else "vec", out)
          }
          # store ins that are not in previous outs neither in inps
          di=setdiff(setdiff(ins, outv), inps)
          inps=c(inps, di)
       }
 #browser()
-      # hart part: add a line of cpp code preceded by declarations
+      # hart part: add a line of cpp code (outs are already declared)
       if (ret == "") {
          code=sprintf("%s%s", code, st2arma(st, indent=indent, env=pfenv, dim_tab=var_dims))
       }
@@ -196,29 +237,18 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
       }
       # give names if needed
       if (is.null(names(outvars))) {
+         # by default name all list items
          names(outvars)=outvars
-      } else {
-         # if some names are empty, keep the value as name
-         i=nchar(names(outvars))==0
-         names(outvars)[i]=outvars[i]
-      }
-      outtype=sapply(outvars, function(v) {
-         d=var_dims[[v]];
-         if (length(d)==2L) {
-            return(c("mat", "NumericMatrix"))
-         } else if (d == "1") {
-            return(c("double", "double"))
-         } else {
-            return(c("vec", "NumericVector"))
-         }
-      })
-      dim(outtype)=c(2L, length(outvars))
-      rownames(outtype)=c("arma", "rcpp")
+      } # if some names are empty, corresponding items will be unnamed
       # colvec to vector conversion
 #browser()
-      outconv=ifelse(outtype=="vec", sprintf("NumericVector(%s.begin(), %s.end())", outvars, outvars), outvars)
+      outtype=var_decl[outvars,,drop=FALSE]
+      outconv=outvars
+      ivec=grep("vec$", outtype[, "arma"])
+      outconv[ivec]=sprintf("%s(%s.begin(), %s.end())",
+         outtype[ivec, "rcpp"], outvars[ivec], outvars[ivec])
       ret=sprintf("%sreturn List::create(\n%s\n   );\n", indent,
-         paste('      Named("', names(outvars), '")=',
+         paste('      _("', names(outvars), '")=',
          outconv, sep='', collapse=",\n"))
    }
    if (!is.null(inpvars)) {
@@ -237,41 +267,46 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    }
    
    # gather rcpp code
-   inptype=sapply(inpvars, function(v) {
-      d=var_dims[[v]];
-      if (length(d)==2L) {
-         return(c("mat", "NumericMatrix"))
-      } else if (d == "1") {
-         return(c("double", "double"))
-      } else {
-         return(c("vec", "NumericVector"))
-      }
-   })
-   dim(inptype)=c(2L, length(inpvars))
-   rownames(inptype)=c("arma", "rcpp")
+   inptype=var_decl[inpvars,,drop=FALSE]
    do_copy= if (copy) "true" else "false"
    if (length(inpvars)) {
-      decl=ifelse(inptype["arma",]=="mat",
-         paste("   mat ", inpvars, "(", inpvars, "_in_.begin(), ", inpvars, "_in_.nrow(), ", inpvars, "_in_.ncol(), ", do_copy, ");", sep=""),
-         ifelse (inptype["arma",]=="vec", paste("   vec ", inpvars, "(", inpvars, "_in_.begin(), ",inpvars, "_in_.size(), ", do_copy, ");", sep=""),
-         paste("   double ",inpvars, "=", inpvars, "_in_;", sep=""))
-      )
-
-      sig=paste(inptype["rcpp",], " ", inpvars, "_in_", sep="", collapse=",\n")
+      inna=!is.na(inptype[,"arma"])
+      imat=grep("mat$", inptype[,"arma"])
+      ivec=grep("vec$", inptype[,"arma"])
+      decl=sprintf("%s %s;\n", inptype[inna,"arma"], inpvars[inna])
+      decl[imat]=sprintf("   %s %s(%s_in_.begin(), %s_in_.nrow(), %s_in_.ncol(), %s);\n",
+         inptype[inna,"arma"][imat], inpvars[inna][imat], inpvars[inna][imat],
+         inpvars[inna][imat], inpvars[inna][imat], do_copy)
+      decl[ivec]=sprintf("   %s %s(%s_in_.begin(), %s_in_.size(), %s);\n",
+         inptype[inna,"arma"][ivec], inpvars[inna][ivec], inpvars[inna][ivec],
+         inpvars[inna][ivec], do_copy)
+#browser()
+      # add "_in_" to vars that will be converted to vec mat
+      ivm=grep("(vec|mat)$", inptype[,"arma"])
+      inp_in=inpvars
+      inp_in[ivm]=sprintf("%s_in_", inpvars[ivm])
+      sig=paste(inptype[,"rcpp"], inp_in, sep=" ", collapse=",\n")
    } else {
       decl=sig=""
+   }
+   out_decl=""
+   for (out in outv) {
+      out_decl=sprintf("%s%s%s %s;\n", out_decl, indent,
+         var_decl[out, "arma"], out)
    }
    body=sprintf("
    using namespace arma;
    using namespace Rcpp;
    // auxiliary variables
-   uword isca1, isca2;
-   uvec  ivec1, ivec2;
-   // Variable declarations
+   uword usca1, usca2;
+   uvec  uvec1, uvec2;
+   // Input variable declarations
+%s
+   // Output and intermediate variable declaration
 %s
    // Translated code starts here
 %s
-%s", paste(decl, collapse="\n") , code, ret)
+%s", paste(decl, collapse="") , out_decl, code, ret)
    
    code=sprintf("
 cppFunction(depends='RcppArmadillo', rebuild=%s,\n'SEXP %s(\n%s) {\n%s\n}'\n)\n",
