@@ -12,7 +12,7 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
    # - of length 1 for a vector, e.g. "length(vec)"
    # - a string "1" for a scalar
    # e.g. for a matrix a, symdim(a) should return c("nrow(a)", "ncol(a)")
-   # If some error occurs, a NULL is returned
+   # If some error occurs, a NA is returned
    # The argument 'dim_tab' is a named list or env where object
    # symbolic dimensions are retrieved from. 
    # The argument 'env' is where objects from the statement are searched for
@@ -23,24 +23,28 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
    # or simply
    # > symdim(parse(t="x=a%*%(b+c)")[[1L]])
 #browser()
-   if (is.symbol(st)) {
+
+   if (is.symbol(st) || as.character(st[[1L]]) == "$") {
       # we are ready to return the dim vector
       s1=as.character(st)
-      if (any(s1 == names(dim_tab))) {
+      if (s1 %in% names(dim_tab)) {
          # already known
          return(dim_tab[[s1]])
       } else {
          obj=eval(st, env=env)
-         cl=class(obj)
          len=length(obj)
-         if (cl == "matrix") {
-            return(c(sprintf("nrow(%s)", s1), sprintf("ncol(%s)", s1)))
-         } else if (len == 1) {
-            # to be cast a scalar, it is a vector who must be of length 1, not a matrix
-            return("1")
-         } else {
-            return(sprintf("length(%s)", s1))
+         if (len == 1) {
+             # to be cast a scalar, it is a vector who must be of length 1, not a matrix
+             return("1")
          }
+         if (is.matrix(obj)) {
+            return(c(sprintf("nrow(%s)", s1), sprintf("ncol(%s)", s1)))
+         }
+         if (is.vector(obj)) {
+             return(sprintf("length(%s)", s1))
+         }
+         # for not scalar, vector, matrix
+         return(NA)
       }
    }
    if (is.numeric(st) || is.logical(st) || is.character(st)) {
@@ -51,11 +55,11 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
    t1=typeof(st[[1L]])
    m1=mode(st[[1L]])
    lenst=length(st)
-   if (any(s1 == c("=", "<-"))) {
+   if (s1 %in% c("=", "<-")) {
       # return the dims of the RHS
       return(symdim(st[[3L]], dim_tab, env))
    }
-   # dims af arguments
+   # dims of arguments
    dims=lapply(st[-1], symdim, dim_tab, env)
    lens=sapply(dims, length)
    if (any(s1 == c("+", "-", "*", "/")) && lenst == 3L) {
@@ -183,15 +187,16 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
       return(sprintf("length(%s)", format(st)))
    }
    if (s1 == "[") {
-      # indexing operator => the longest dims
+#browser()
+      # indexing operator
       if (max(lens[-1L]) > 1L) {
-         # index is matrix
-         i=which.max(lens[-1L])
-         return(sprintf("nrow(%s)", args[i+1L]))
+         # index is matrix => result of indexing is a vector
+         stopifnot(length(args) != 2L) # only one matrix in index
+         return(sprintf("nrow(%s)", args[2L]))
       }
       # vector index(es) of vector or matrix?
       if (lens[1L] > 1L) {
-         # getting submatrix
+         # indexes of a matrix
          if (dims[[2L]] == "1" && dims[[3L]] == "1") {
             return("1")
          }
@@ -200,9 +205,14 @@ symdim=function(st, dim_tab=NULL, env=parent.frame()) {
       # getting subvector
       return(dims[[2L]])
    }
+   if (s1 == "(") {
+      # pass through the dims of the first argument
+      return(dims[[1L]])
+   }
    
-   # by default we suppose that the function operates on each term of its first argument
-   return(dims[[1L]])
+   # by default
+   warning(sprintf("Couldn't retrive dimension for '%s'", format(st)))
+   return(NA)
 }
 
 st2arma=function(
@@ -240,6 +250,34 @@ indent="",
    if (s1 == "=" || s1 == "<-") {
       return(sprintf("%s%s=%s;\n", indent, args[1L], args[2L]))
    }
+   # data/code control
+   if (s1 == "(") {
+      # parenthesis operations
+      return(sprintf("(%s)", args[1L]))
+   }
+   if (s1 == "[") {
+      # indexing operations, decrement by 1
+      i=sapply(st[-1L], is.numeric) # first argument is alway false, it is a symbol
+      args[-1L]=sprintf("(%s)-1", args[-1L])
+      args[i]=sapply(args[i], function(te) eval(parse(t=te)))
+      return(sprintf("%s.at(%s)", args[1L], paste(args[-1L], collapse=", ")))
+   }
+   if (s1 == ":") {
+      # sequence operations
+      return(sprintf("span(%s, %s)", args[1L], args[2L]))
+   }
+   if (s1 == "for") {
+      if (as.character(st[[3L]][[1L]]) == ":") {
+         # Here only integer counter on integer range "begin:end" will work
+         begend=sapply(st[[3L]][-1L], st2arma, call2arma, indent, ...)
+         counter=args[1L]
+         return(sprintf("%sfor (int %s=%s; %s <= %s; ++%s) %s\n",
+            indent, counter, begend[1L], counter, begend[2L], counter, args[3L]))
+      }
+   }
+   if (s1 == "return") {
+      return(sprintf("return wrap(%s)", args[1L]))
+   }
    if (s1 == "if") {
       res=sprintf("%sif (%s) %s;", indent, args[1L], args[2L])
       if (length(args) == 3L) {
@@ -251,6 +289,11 @@ indent="",
       return(sprintf("{\n%s%s}", 
          paste(sprintf("%s   ", indent), args, collapse=""), indent))
    }
+   if (s1 == "$") {
+      # list element by name
+      return(sprintf('%s["%s"]', args[1L], args[2L]))
+   }
+   
    dims=lapply(st[-1L], symdim, ...)
    lens=sapply(dims, length)
    lenst=length(st)
@@ -335,31 +378,7 @@ indent="",
       return(sprintf("%s%s", s1, args[1L]))
    }
    
-   # data/code control
-   if (s1 == "(") {
-      # parenthesis operations
-      return(sprintf("(%s)", args[1L]))
-   }
-   if (s1 == "[") {
-      # indexing operations, decrement by 1
-      return(sprintf("%s.at(%s)", args[1L], paste(sprintf("%s-1", args[-1L]), collapse=", ")))
-   }
-   if (s1 == ":") {
-      # sequence operations
-      return(sprintf("span(%s, %s)", args[1L], args[2L]))
-   }
-   if (s1 == "for") {
-      if (as.character(st[[3L]][[1L]]) == ":") {
-         # Here only integer counter on integer range "begin:end" will work
-         begend=sapply(st[[3L]][-1L], st2arma, call2arma, indent, ...)
-         counter=args[1L]
-         return(sprintf("%sfor (int %s=%s; %s <= %s; ++%s) %s\n",
-            indent, counter, begend[1L], counter, begend[2L], counter, args[3L]))
-      }
-   }
-   if (s1 == "return") {
-      return(sprintf("return wrap(%s)", args[1L]))
-   }
+   # data creation
    if (s1 %in% c("c", "as.numeric", "as.double") && lens[1L] > 1L) {
       return(sprintf("vectorise(%s)", args[1L]))
    }
@@ -370,7 +389,7 @@ indent="",
    if (s1 == "list") {
 #browser()
       nms=names(st[-1L])
-      nms=ifelse(nchar(nms), sprintf('Named("%s")=', nms), nms)
+      nms=ifelse(nchar(nms), sprintf('_("%s")=', nms), nms)
       # convert vec in args to NumericVector
       argconv=sapply(seq_along(args), function(i) if (lens[i] > 1L || dims[[i]][1L]=="1") args[i] else sprintf("NumericVector(%s.begin(), %s.end())", args[i], args[i]))
       return(sprintf("List::create(%s)", paste(nms, argconv, sep="", collapse=", ")))
@@ -435,10 +454,10 @@ indent="",
       return("%s.size()")
    }
    if (s1 == "which.max") {
-      return(sprintf("((%s).max(isca1), isca1+1)"))
+      return(sprintf("((%s).max(usca1), usca1+1)", args[1L]))
    }
    if (s1 == "which.min") {
-      return(sprintf("((%s).min(isca1), isca1+1)"))
+      return(sprintf("((%s).min(usca1), usca1+1)", args[1L]))
    }
    if (s1 == "t") {
       if (is.symbol(st[[2]])) {
@@ -453,4 +472,106 @@ indent="",
    }
    # by default return st as a function call
    return(sprintf("%s(%s)", s1, paste(args, collapse=", ")))
+}
+get_vartype=function(var, env=parent.frame()) {
+   # return a named character vector of r, rcpp and arma types that can be used in variable declarations
+   # together with struct (one of scalar, vector, matrix if applicable)
+   if (is.character(var)) var=as.symbol(var)
+   obj=eval(var, env=env)
+   r=typeof(obj)
+   return(switch(r,
+      "function"=c(r=r, rcpp="Function", arma=NA),
+      "list"=c(r=r, rcpp="List", arma=NA),
+      "character"=c(r=r, rcpp="Character", arma=NA),
+      "numeric"=c(r=r, rcpp="Numeric", arma=""),
+      "double"=c(r=r, rcpp="Numeric", arma=""),
+      "integer"=c(r=r, rcpp="Integer", arma="i"),
+      "logical"=c(r=r, rcpp="Logical", arma="i"),
+      "default"=c(r=r, rcpp="SEXP", arma=NA)
+   ))
+}
+get_decl=function(var, typeof_tab, var_dims) {
+   # return a named vector with rcpp and arma part of declarations
+   # as scalar, vector or matrix.
+   # typeof_tab is a three column matrix, var_dims is a list of symbolic dimensions
+   var=as.character(var)
+   if (! var %in% rownames(typeof_tab)) {
+      stop(sprintf("Uknown type of variable '%s'", var))
+   }
+   t=typeof_tab[var,]
+   if (t["r"] %in% c("character", "numeric", "double", "integer", "logical")) {
+      if (! var %in% names(var_dims)) {
+         stop(sprintf("Unknown dimension for variable '%s' of R type '%s'", var, t["r"]))
+      }
+      d=var_dims[[var]]
+      if (length(d) > 1L) {
+         # matrix
+         return(c(
+            rcpp=sprintf("%sMatrix", t["rcpp"]),
+            arma=if (!is.na(t["arma"])) sprintf("%smat", t["arma"]) else NA
+         ))
+      }
+      if (d == "1") {
+         # scalar
+         return(c(
+            rcpp=switch(t["r"],
+               "character"="std:string",
+               "complex"="complex",
+               "numeric"="double",
+               "double"="double",
+               "integer"="int",
+               "logical"="bool"
+            ),
+            arma=switch(t["r"],
+               "character"="std:string",
+               "complex"="complex",
+               "numeric"="double",
+               "double"="double",
+               "integer"="int",
+               "logical"="bool"
+            )
+         ))
+      }
+      # vector
+      return(c(
+         rcpp=sprintf("%sVector", t["rcpp"]),
+         arma=if (!is.na(t["arma"])) sprintf("%svec", t["arma"]) else NA
+      ))
+   }
+   # by default, give just typeof
+   return(t)
+}
+get_assign=function(st) {
+   # go through the tree of statments to gather and return assignements and
+   # for loop begining
+   res=list()
+   if (!is.language(st)) {
+      return(res)
+   }
+   s=as.character(st[[1L]])
+   if (s == "=" || s == "<-") {
+      res[[1L]]=st
+      return(res)
+   }
+   if (s == "for") {
+      res[[1L]]=st[1:3]
+      res=append(res, get_assign(st[[4L]]))
+      return(res)
+   }
+   if (s == "if") {
+      res=get_assign(st[[3L]])
+      if (length(st) == 4L) {
+         # else block is present
+         res=append(res, get_assign(st[[4L]]))
+      }
+      return(res)
+   }
+   if (s == "{") {
+      for (i in 2:length(st)) {
+         res=append(res, get_assign(st[[i]]))
+      }
+      return(res)
+   }
+   # by default, empty list
+   return(res)
 }
