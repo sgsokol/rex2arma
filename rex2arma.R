@@ -3,7 +3,6 @@
 # Licence of RcppArmadillo applies here
 # Copyright 2014, INRA, France
 
-source("rex2arma.inc.R")
 rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL) {
    # translate a (simple) R code (or a string having a code or an expression
    # or a function) to RcppArmadillo inline code using cppFunction().
@@ -127,6 +126,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    var_typeof=matrix(NA, nrow=0, ncol=3)
    colnames(var_typeof)=c("r", "rcpp", "arma")
    var_decl=matrix(NA, nrow=0, ncol=2)
+   fun_decl=c()
    colnames(var_decl)=c("rcpp", "arma")
    indent="   "
    for (i in 1:length(e)) {
@@ -134,92 +134,153 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
       ins=c() # input vars -"-
       s1="" # first item in st
       st=e[[i]] # current statement
-      if (is.symbol(st) || is.numeric(st) ||
-         as.character(s1 <- st[[1]])=="return" ||
-         (s1 != "=" && s1 != "<-" && s1 != "if")) {
+      # declare R functin calls of type package::func()
+      pada=getParseData(parse(t=if (is.call(st)) format(st) else as.character(st)))
+      # function calls
+      ifu=which(pada$token == "SYMBOL_FUNCTION_CALL")
+      # namespace "::" operator
+      ins_get=pada$id[ifu] > 1 & pada$token[ifu-1] == "NS_GET"
+      # package_function names
+      pkg=pada$text[ifu[ins_get]-2]
+      fun=pada$text[ifu[ins_get]]
+      if (length(fun)) {
+         # declare the functions if not yet done
+         pfun=sprintf("%s_%s_r_", pkg, fun)
+         fun_decl=c(fun_decl, sprintf('%sFunction %s=Environment("package:%s")["%s"];\n',
+            indent, pfun, pkg, fun))
+      }
+      # alone functions other than from package:base
+      fun=pada$text[ifu[!ins_get]]
+      pkg=sapply(fun, function(f) { p=find(f, mode="function"); if ("package:base" %in% p) "package:base" else p[1]})
+      inb=pkg != "package:base"
+      fun=fun[inb]
+      pkg=substring(pkg[inb], 9L)
+      if (length(fun)) {
+         # declare the functions if not yet done
+         pfun=sprintf("%s_%s_r_", pkg, fun)
+         fun_decl=c(fun_decl, sprintf('%sFunction %s=Environment("package:%s")["%s"];\n',
+            indent, pfun, pkg, fun))
+      }
+      s1=if (is.call(st)) as.character(st[[1L]]) else as.character(st)
+      if (is.symbol(st) || ! is.language(st) || s1 == "return" ||
+         (s1 != "=" && s1 != "<-" && s1 != "if" && s1 != "print")) {
          # it must be the last statement before return
          if (i != length(e)) {
-            stop(sprintf("Statement '%s' is not assignement. It mus be the last one in the list", st))
+            stop(sprintf("Statement '%s' is not assignement. It mus be the last one in the list", format(st)))
          }
          # prepare return
-         ret=st2arma(st, indent=indent, env=pfenv, dim_tab=var_dims)
+         ret=st2arma(st, indent=indent, iftern=TRUE, env=probenv, dim_tab=var_dims)
          if (s1 != "return") {
             # return just the last expression (which is not "=" neither "<-")
             ret=sprintf("%sreturn wrap(%s);\n", indent, ret)
          } else {
             ret=sprintf("%s%s;\n", indent, ret)
          }
-      }
-#browser()
-      pada=getParseData(parse(t=format(st)))
-      ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN" |
-         pada$token=="IN")
-      # gather out vars (because of "if" and "for" blocks, it may be many
-      for (i in ieq) {
-         out=pada$text[pada$id == pada$id[i]-1L]
-         irhs=(pada$line2[i+1L]==pada$line1[i+1L] &
-            pada$line1 == pada$line1[i+1L] &
-            pada$col1 <= pada$col2[i+1L] &
-            pada$col1 >= pada$col1[i+1L]) |
-            (pada$line2[i+1] > pada$line1[i+1] &
-            ((pada$line1==pada$line1[i+1] &
-            pada$col1 >= pada$col1[i+1]) |
-            (pada$line1 > pada$line1[i+1L] &
-            pada$line1 < pada$line2[i+1L]) |
-            (pada$line1 == pada$line2[i+1L] &
-            pada$col1 <= pada$col2[i+1L])))
-         # gather ins
-         isy=which(pada$token=="SYMBOL" & irhs)
-         # exclude $smth symbols
-         idol=which(irhs & pada$token=="'$'")
+         # exclude from ins list member with "$"
+         isy=which(pada$token=="SYMBOL")
+         idol=which(pada$token=="'$'")
          if (length(idol)) {
             idol=apply(outer(isy, idol, `-`), 2L, function(v) which.max(v > 0L))
             isy=isy[-idol]
          }
-         
-         ins=sort(unique(pada$text[isy]))
+         ins=gsub("\\.", "_", sort(unique(pada$text[isy])))
+         # add ins to probenv
+         for (it in setdiff(ins, ls(probenv))) {
+            assign(it, get(it, env=pfenv), env=probenv)
+         }
          # get typeof and declaration ins
          for (it in setdiff(ins, rownames(var_decl))) {
-            # update var_typeof
-            if (it %in% outv) {
-               var_typeof=rbind(var_typeof, get_vartype(it, probenv))
-            } else {
-               var_typeof=rbind(var_typeof, get_vartype(it, pfenv))
-            }
+            # update var_typeof and dims
+            var_typeof=rbind(var_typeof, get_vartype(it, probenv))
+            var_dims[[it]]=symdim(as.symbol(it), probenv, var_dims)
             rownames(var_typeof)[nrow(var_typeof)]=it
-            # update var_dims
-            var_dims[[it]]=symdim(as.symbol(it), var_dims, pfenv)
             # update var_decl
-            var_decl=rbind(var_decl, get_decl(it, var_typeof, var_dims))
+            var_decl=rbind(var_decl, get_decl(var_typeof[it,], var_dims[[it]]))
             rownames(var_decl)[nrow(var_decl)]=it
          }
          known=rownames(var_decl)
-         outv=c(outv, out)
-         if (! out %in% known) {
-#browser()
-            rhs=paste(pada$text[irhs], collapse=" ")
-            # probe R exec
-            if (pada$token[i] == "IN") {
-               # for "for" loop take just first element
-               eval(parse(t=sprintf("%s=head(%s, 1L)", out, rhs)), env=probenv)
-            } else {
-               eval(parse(t=sprintf("%s=%s", out, rhs)), env=probenv)
-            }
-            var_typeof=rbind(var_typeof, get_vartype(out, probenv))
-            rownames(var_typeof)[nrow(var_typeof)]=out
-            var_dims[[out]]=symdim(as.symbol(out), var_dims, env=probenv)
-            var_decl=rbind(var_decl, get_decl(out, var_typeof, var_dims))
-            rownames(var_decl)[nrow(var_decl)]=out
-            known=c(known, out)
-         }
          # store ins that are not in previous outs neither in inps
          di=setdiff(setdiff(ins, outv), inps)
          inps=c(inps, di)
       }
 #browser()
+      #pada=getParseData(parse(t=format(st)))
+      #ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN" |
+      #   pada$token=="IN")
+      # gather out vars in assignements and for loops (because of "if" and "for" blocks, it may be many)
+      leq=get_assign(st) # list of equalities
+      for (eq in leq) {
+         if (length(eq) == 0L) {
+            next
+         }
+         # get ins var
+         s1=as.character(eq[[1L]])
+         if (s1 == "if") {
+            rhs=if (is.call(eq[[2L]])) format(eq[[2L]]) else as.character(eq[[2L]])
+         } else {
+            rhs=if (!is.call(eq[[3L]])) as.character(eq[[3L]]) else
+               format(eq[[3L]])
+         }
+         pada=getParseData(parse(t=rhs))
+         # exclude from ins list member with "$"
+         isy=which(pada$token=="SYMBOL")
+         idol=which(pada$token=="'$'")
+         if (length(idol)) {
+            idol=apply(outer(isy, idol, `-`), 2L, function(v) which.max(v > 0L))
+            isy=isy[-idol]
+         }
+         ins=gsub("\\.", "_", sort(unique(pada$text[isy])))
+         # add ins to probenv
+         for (it in setdiff(ins, ls(probenv))) {
+            assign(it, get(it, env=pfenv), env=probenv)
+         }
+         # get typeof and declaration ins
+         for (it in setdiff(ins, rownames(var_decl))) {
+            # update var_typeof and dims
+            var_typeof=rbind(var_typeof, get_vartype(it, probenv))
+            var_dims[[it]]=symdim(as.symbol(it), probenv, var_dims)
+            rownames(var_typeof)[nrow(var_typeof)]=it
+            # update var_decl
+            var_decl=rbind(var_decl, get_decl(var_typeof[it,], var_dims[[it]]))
+            rownames(var_decl)[nrow(var_decl)]=it
+         }
+         known=rownames(var_decl)
+         # store ins that are not in previous outs neither in inps
+         di=setdiff(setdiff(ins, outv), inps)
+         inps=c(inps, di)
+         # out update
+         if (s1 == "if") {
+            # no out in this operator
+            next
+         }
+         if (!is.symbol(eq[[2L]]) && as.character(eq[[2L]][[1L]]) == "[") {
+            out=as.character(eq[[2L]][[2L]])
+         } else {
+            out=as.character(eq[[2L]])
+         }
+         out=gsub("\\.", "_", out)
+         if (! out %in% known) {
+            outv=c(outv, out)
+         }
+         if (! out %in% known) {
+#browser()
+            # rhs for probe execution
+            if (s1 =="for") {
+               rhs=sprintf("head(%s, 1L)", rhs)
+            }
+            eval(parse(t=sprintf("%s=%s", out, rhs)), env=probenv)
+            var_typeof=rbind(var_typeof, get_vartype(out, probenv))
+            rownames(var_typeof)[nrow(var_typeof)]=out
+            var_dims[[out]]=symdim(as.symbol(out), probenv, var_dims)
+            var_decl=rbind(var_decl, get_decl(var_typeof[out,], var_dims[[out]]))
+            rownames(var_decl)[nrow(var_decl)]=out
+            known=c(known, out)
+         }
+      }
+#browser()
       # hart part: add a line of cpp code (outs are already declared)
       if (ret == "") {
-         code=sprintf("%s%s", code, st2arma(st, indent=indent, env=pfenv, dim_tab=var_dims))
+         code=sprintf("%s%s", code, st2arma(st, indent=indent, iftern=FALSE, env=probenv, dim_tab=var_dims))
       }
    }
    if (ret == "") {
@@ -270,16 +331,17 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    inptype=var_decl[inpvars,,drop=FALSE]
    do_copy= if (copy) "true" else "false"
    if (length(inpvars)) {
-      inna=!is.na(inptype[,"arma"])
-      imat=grep("mat$", inptype[,"arma"])
-      ivec=grep("vec$", inptype[,"arma"])
-      decl=sprintf("%s %s;\n", inptype[inna,"arma"], inpvars[inna])
-      decl[imat]=sprintf("   %s %s(%s_in_.begin(), %s_in_.nrow(), %s_in_.ncol(), %s);\n",
-         inptype[inna,"arma"][imat], inpvars[inna][imat], inpvars[inna][imat],
-         inpvars[inna][imat], inpvars[inna][imat], do_copy)
-      decl[ivec]=sprintf("   %s %s(%s_in_.begin(), %s_in_.size(), %s);\n",
-         inptype[inna,"arma"][ivec], inpvars[inna][ivec], inpvars[inna][ivec],
-         inpvars[inna][ivec], do_copy)
+      iconv=grep("(vec|mat)$", inptype[,"arma"])
+      inparma=inptype[iconv,"arma"]
+      imat=grep("mat$", inparma)
+      ivec=grep("vec$", inparma)
+      decl=inpvars[iconv]
+      decl[imat]=sprintf("%s%s %s(%s_in_.begin(), %s_in_.nrow(), %s_in_.ncol(), %s);\n",
+         indent, inparma[imat], decl[imat], decl[imat],
+         decl[imat], decl[imat], do_copy)
+      decl[ivec]=sprintf("%s%s %s(%s_in_.begin(), %s_in_.size(), %s);\n",
+         indent, inparma[ivec], decl[ivec], decl[ivec],
+         decl[ivec], do_copy)
 #browser()
       # add "_in_" to vars that will be converted to vec mat
       ivm=grep("(vec|mat)$", inptype[,"arma"])
@@ -290,27 +352,54 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
       decl=sig=""
    }
    out_decl=""
+   if (length(outv)) {
+      outv=sort(unique(outv))
+   }
    for (out in outv) {
       out_decl=sprintf("%s%s%s %s;\n", out_decl, indent,
          var_decl[out, "arma"], out)
    }
-   body=sprintf("
-   using namespace arma;
-   using namespace Rcpp;
-   // auxiliary variables
-   uword usca1, usca2;
-   uvec  uvec1, uvec2;
-   // Input variable declarations
+   
+   if (length(fun_decl)) {
+      fun_decl=sort(unique(fun_decl))
+   }
+   body=sprintf('
+   // auxiliary functions
+   Environment base_env_r_=Environment::base_env();
+   Function rep_r_=base_env_r_["rep"];
+   Function c_r_=base_env_r_["c"];
+   // External R function declarations
 %s
-   // Output and intermediate variable declaration
+   // Input variable declarations and conversion
+%s
+   // Output and intermediate variable declarations
 %s
    // Translated code starts here
 %s
-%s", paste(decl, collapse="") , out_decl, code, ret)
+%s', paste(fun_decl, collapse=""), paste(decl, collapse=""), out_decl, code, ret)
    
    code=sprintf("
-cppFunction(depends='RcppArmadillo', rebuild=%s,\n'SEXP %s(\n%s) {\n%s\n}'\n)\n",
-      rebuild, fname, sig, body)
+cppFunction(depends='RcppArmadillo', rebuild=%s, includes='
+template <typename T>
+inline unsigned which_max(T v) {
+   unsigned i;
+   v.max(i);
+   return i+1;
+}
+
+template<typename T>
+inline unsigned which_min(T v) {
+   unsigned i;
+   v.min(i);
+   return i+1;
+}
+', \n\"
+
+using namespace arma;
+using namespace Rcpp;
+
+SEXP %s(\n%s) {\n%s\n}\"\n)\n",
+      rebuild, fname, sig, gsub('"', '\\\\"', body))
    if (isTRUE(exec) || exec==2L) {
       # create function in the parent frame
       # call it with params from the parent frame
