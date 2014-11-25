@@ -11,7 +11,8 @@ expm.higham=function (A, balancing = TRUE)
         baS <- balance(baP$z, "S")
         A <- baS$z
     }
-    nA <- Matrix::norm(A, "1")
+    #nA <- Matrix::norm(A, "1")
+    nA <- norm(A, "1")
 #print(nA);
     I <- diag(n)
     if (nA <= 2.1) {
