@@ -150,7 +150,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       }
       return(dims[[1L]])
    }
-   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "min", "max", "sd")) {
+   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "min", "max", "sd", "norm")) {
       # reducing to scalar functions
       return("1")
    }
@@ -276,7 +276,8 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
 st2arma=function(
 st,
 call2arma=c("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
-   "ceiling"="ceil", "which.min"="which_min", "which.max"="which_max"),
+   "ceiling"="ceil", "which.min"="which_min", "which.max"="which_max",
+   "Re"="real", "Im"="imag"),
 indent="",
 iftern=FALSE,
 env=parent.frame(),
@@ -286,7 +287,7 @@ env=parent.frame(),
    # For nested blocks in curved brackets "{...}", indent is incremented.
    # If 'iftern==TRUE', "if" operator is translated as ternary operator "a?b:c"
    # env is environment where some expressions are evaluated to get there R type and dimension
-   # Parameters in ... and env are passed to symdim().
+   # Parameters in ... and 'env' are passed to symdim().
    if (!is.call(st)) {
       s1=as.character(st)
       if (is.character(st)) {
@@ -380,7 +381,12 @@ env=parent.frame(),
    }
    if (s1 == ":") {
       # sequence operations
-      return(sprintf("linspace<ivec>(%s, %s, abs(%s-%s)+1)", args[1L], args[2L], args[2L], args[1L]))
+      if (is.numeric(st[[2L]]) && is.numeric(st[[3L]])) {
+         len=as.integer(abs(st[[3L]]-st[[2L]])+1)
+      } else {
+         len=sprintf("abs(%s-%s)+1", args[2L], args[1L])
+      }
+      return(sprintf("linspace<ivec>(%s, %s, %s)", args[1L], args[2L], len))
    }
    if (s1 == "for") {
       if (is.call(st[[3L]]) && as.character(st[[3L]][[1L]]) == ":") {
@@ -558,26 +564,76 @@ env=parent.frame(),
       )
    }
    if (s1 == "rbind") {
+      rtype=rtype2rcpparma(typeof(eval(st[[2L]], env=env)))["arma"]
       # prepare the first matrix
       if (length(dims[[1L]]) == 1L && dims[[1L]] == "1") {
-         res=sprintf("mat(1,1).fill(%s)", args[1L])
+         res=sprintf("%smat(1,1).fill(%s)", rtype, args[1L])
       } else if (length(dims[[1L]]) == 1L) {
-         res=sprintf("%s.st()", args[1L])
+         res=sprintf("(%s).st()", args[1L])
       } else {
          # return the only matrix as is
+         res=args[1L]
+      }
+      if (length(args) == 1L) {
+         return(res)
+      }
+      for (i in 2L:length(args)) {
+         a=args[i]
+         if (length(dims[[i]]) == 1L) {
+            a=sprintf("(%s).st()", a)
+         }
+         atype=rtype2rcpparma(typeof(eval(st[[i+1L]], env=env)))["arma"]
+         if (atype != rtype) {
+            if (atype == "cx_" || atype == "") {
+               # convert res
+               rtype=atype
+               res=sprintf("join_vert(conv_to<%smat>::from(%s), %s)", atype, res, a)
+            } else {
+               # convert a
+               res=sprintf("join_vert(%s, conv_to<%smat>::from(%s))", rtype, res, a)
+            }
+         } else {
+            # simply join
+            res=sprintf("join_vert(%s, %s)", res, a)
+         }
+      }
+      return(res)
+   }
+   if (s1 == "cbind") {
+#browser()
+      rtype=rtype2rcpparma(typeof(eval(st[[2L]], env=env)))["arma"]
+      # prepare the first matrix
+      if (length(dims[[1L]]) == 1L && dims[[1L]] == "1") {
+         res=sprintf("%smat(1,1).fill(%s)", rtype, args[1L])
+      } else if (length(dims[[1L]]) == 1L) {
+         res=sprintf("%smat(%s)", rtype, args[1L])
+      } else {
+         # return the first matrix as is
          res=args[1]
       }
       if (length(args) == 1L) {
          return(res)
       }
-      for (i in 2:length(args)) {
+      for (i in 2L:length(args)) {
          a=args[i]
-         res=sprintf("join_vert(%s, %s%s)", res, a, if (length(dims[[i]])==1) ".st()" else "")
+         atype=rtype2rcpparma(typeof(eval(st[[i+1L]], env=env)))["arma"]
+         if (atype != rtype) {
+            if (atype == "cx_" || atype == "") {
+               # convert res
+               rtype=atype
+               res=sprintf("join_horiz(conv_to<%smat>::from(%s), %s)", atype, res, a)
+            } else {
+               # convert a
+               res=sprintf("join_horiz(%s, conv_to<%smat>::from(%s))", rtype, res, a)
+            }
+         } else {
+            # simply join
+            res=sprintf("join_horiz(%s, %s)", res, a)
+         }
       }
       return(res)
    }
    if (s1 == "list") {
-#browser()
       # convert vec in args to NumericVector
       argconv=sapply(seq_along(args), function(i) if (lens[i] > 1L || dims[[i]][1L]=="1") args[i] else sprintf("NumericVector(%s.begin(), %s.end())", args[i], args[i]))
       return(sprintf("List::create(%s)", paste(nms, argconv, sep="", collapse=", ")))
@@ -629,7 +685,7 @@ env=parent.frame(),
          }
       }
    }
-    
+   
    if (s1 == "nrow") {
       if (is.symbol(st[[2]])) {
          return(sprintf("%s.n_rows", args[1L]))
@@ -653,6 +709,25 @@ env=parent.frame(),
          return(sprintf("%s.st()", args[1L]))
       }
       return(sprintf("(%s).t()", args[1L]))
+   }
+   
+   # needing argument conversion functions
+   if (s1 == "norm") {
+      if (lenst == 2L) {
+         return(sprintf("norm(%s)", args))
+      } else if (lenst == 3L) {
+         if (is.character(st[[3L]])) {
+            ntype=c("1"=1, "O"=1, "2"=2, "I"='"inf"', "F"='"fro"')[toupper(st[[3L]])]
+            if (is.na(ntype) && toupper(st[[3L]]) == "M") {
+               return(sprintf("max(abs(vectorise(%s)))", args))
+            } else if (is.na(ntype)) {
+               stop(sprintf("unknown norm type in '%s'", format(st)))
+            }
+            return(sprintf("norm(%s, %s)", args[1L], ntype))
+         } else {
+            stop(sprintf('The norm type in "%s" must be one of litteral "O", "I", "F", "M", "2"', format(st)))
+         }
+      }
    }
    if (s1 == "print") {
       if (lens[1L] == 1 && dims[[1]] == "1") {
