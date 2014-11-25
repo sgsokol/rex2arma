@@ -380,6 +380,8 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
    
    code=sprintf("
 cppFunction(depends='RcppArmadillo', rebuild=%s, includes='
+using namespace arma;
+
 template <typename T>
 inline unsigned which_max(T v) {
    unsigned i;
@@ -394,9 +396,6 @@ inline unsigned which_min(T v) {
    return i+1;
 }
 ', \n\"
-
-using namespace arma;
-using namespace Rcpp;
 
 SEXP %s(\n%s) {\n%s\n}\"\n)\n",
       rebuild, fname, sig, gsub('"', '\\\\"', body))
