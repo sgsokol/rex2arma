@@ -1,88 +1,123 @@
-# 2014-11-03
-# Author: Serguei Sokol, sokol@insa-toulouse.fr
-# Licence of RcppArmadillo applies here
-# Copyright 2014, INRA, France
+#' Translate a (simple) R code to RcppArmadillo code.
+#'
+#' @param text A string with a code or an R expression
+#'  or an R function or a plain code.
+#' @param fname A string with a name for Rcpp function (if NULL,
+#'  default to rex_arma_)
+#' @param exec A logical or integer from {1, 2} (default TRUE).
+#' @param copy A logical saying to make or not a local copy of input
+#'  vectors/matrices (default TRUE, i.e. make a copy).
+#' @param rebuild A logical saying to rebuild or not previous Rcpp code
+#'  (default FALSE, i.e. no rebuild if \code{text} does not change)
+#' @param inpvars A character vector with names of input variables
+#'  (default NULL, i.e. this list is automatically constructed)
+#' @param outvars A character vector with names of output variables.
+#'  If there are many, they are put in a list. If \code{outvars} is named,
+#'  The names are used for naming returned list items.
+#' @return a string with generated code or the result of calculation
+#'  depending on \code{exec} (cf. Details)
+#'
+#' @details
+#' If the \code{text} is a string it is parsed. If not, it must
+#' be a valid R expression or a function or a plain code (cf. Examples).
+#'
+#' If \code{exec==FALSE}, the RcppArmadillo code is not executed
+#' it is just returned as a string.
+#' If \code{exec==1}, the Rcpp function is created in the calling
+#'  environment but not executed.
+#' If \code{exec==2} or \code{TRUE}, than the c++ function is called too
+#'  and its output is returned as the result of rex2arma() call.
+#'
+#' If \code{copy==TRUE}, objects inside the cpp code are created
+#' with memory copying.
+#' If \code{copy==FLASE}, the calculations are made "in place"
+#' (be carefull with that! The side effects can be very surprising).
+#' The argument \code{rebuild} is passed through to cppFunction()
+#'
+#' If \code{text} is a function, the argument list is taken
+#' from that function and \code{inpvars} is not consulted.
+#'
+#' If \code{outvars} is  NULL, all variables that appear on the left hand side
+#' will be returned. If \code{text} is a function,
+#' the output is taken from it and \code{outvars} is not consulted.
+#'
+#' @section Warning:
+#' The converted R code is executed in a dedicated environement.
+#'  So it is better to call rex2arma when input variables are small
+#'  vectors/matrices.
+#'
+#' Input variables must be of most generic type during \code{rex2arma()} call.
+#' For example, if \code{a} is supposed to be float, don't set just
+#'  \code{a <- 1:2} which will be of type \code{integer}. Instead use
+#'  \code{a <- 1:2+0.1} or something alike.
+#
+#' @examples
+#' a=1:3; b=a+3; # NB. Inputs a and b are defined before a call to rex2arma()
+#' # \code{text} is a string:
+#' code=rex2arma("a+b", exec=F)
+#' cat(code);
+#'
+#' # \code{text} is a function
+#' f=function(a, b) a+b
+#' code=rex2arma(f, exec=F)
+#'
+#' # \code{text} is a plain R code
+#' code=rex2arma(a+b, exec=F)
+#' code=rex2arma({inner=a%*%b; outer=a%o%b}, exec=F)
+#'
+#' # \code{text} is an expression
+#' e=parse(text="{s=a+b; d=a-b}")
+#' code=rex2arma(e, exec=F)
+#'
+#' # to execute the produced code:
+#' (result=eval(parse(text=code)))
+#' # or simply
+#' (result=rex2arma("a+b"))
+
+#' @section Limitations:
+#' \enumerate{
+#'  \item no implicit vector recycling in term-by-term operations
+#'  \item symbols "T" and "F" are converted to "true" and "false"
+#'  \item no global assignement \code{<<-}
+#'  \item and last but not least, no guaranty that produced code works as
+#'   expected even if it compiles without error
+#' }
+#' Allowed operators and calls are:
+#'   binary: '+', '-', '*', '/', '%*%', '%o%', logical operators
+#'   calls: t(), [qr.]solve(), ginv(), diag()
+#'          nrow(), ncol(), norm()
+#'   element-wise mathematical functions having the
+#'     same syntaxe in R and Armadillo: sqrt(), abs() etc.;
+#'
+#' @section Code conventions:
+#' R variables are considered as one of the following type (typeof(var) -> Rcpp; arma)
+#' (-"- means that the type has no its own equivalent in arma and kept as in Rcpp):
+#'\enumerate{
+#' \item list -> List; -"-
+#' \item character -> Character; -"-
+#' \item numeric -> double; -"-
+#' \item double -> double; -"-"
+#' \item integer -> int; sword
+#' \item function -> Function; -"-
+#' \item logical -> Logical; -"-
+#'}
+#'
+#' Depending on dimension of {numeric, integer, character, logical} variable
+#' it can be one the following structures in Rcpp/arma:
+#' Rcpp / Armadillo types:
+#' - {Integer,Numeric,Complex,Character}Vector/{ivec,vec,cx_vec,-"-}
+#' - {Integer,Numeric,Complex,Character}Matrix/{imat,mat,cx_mat,-"-}
 
 rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL) {
-   # translate a (simple) R code (or a string having a code or an expression
-   # or a function) to RcppArmadillo inline code using cppFunction().
-   # It optionally executes the generated RcppArmadillo function.
-   # If the parameter text is a string it is parsed. If not, it must
-   # be a valid R expression or a function or a plain code.
-   # if exec==FALSE, the RcppArmadillo code is not executed
-   # it is just returned as a string.
-   # If exec==1, the function is created but not executed.
-   # If exec==2 or TRUE, than the function is called too and its output
-   # is returned as the result of rex2arma() call.
-   # If copy==TRUE, objects inside the cpp code are created with memory copying.
-   # If copy==FLASE, the calculations are made "in place"
-   # (be carefull with that! The side effects can be very surprising).
-   # The argument 'rebuild' is passed through to cppFunction()
-   # 'inpvars' is a vector of input variables. If NULL, it is
-   # calculated from the variables appearing on the right had sides (RHS)
-   # of assignements. If parameter 'text' is a function, the argument list is taken
-   # from that function and inpvars is not consulted.
-   # 'outvars' is a vector of variable names that must be returned in the
-   # result list. If NULL, all variables that appear on the left hand side (LHS)
-   # will be returned. If the vector outvars is named, than names will
-   # be used to name list items. If parameter 'text' is a function,
-   # the output is taken from it and outvars is not consulted.
-   #
-   # Usage:
-   # > a=1:3; b=a+3; # NB. the input parameters must be defined before a call to rex2arma()
-   # as a text:
-   # > code=rex2arma("a+b", exec=F)
-   # > cat(code);
-   # as a function
-   # > f=function(a, b) a+b
-   # > code=rex2arma(f, exec=F)
-   # as an R code
-   # > code=rex2arma(a+b, exec=F) # NB. a+b is not executed in R,
-   # # (even is passed as an argument to rex2arma()) but only in the cpp compiled code
-   # or
-   # > code=rex2arma({x=a+b; y=a-b}, exec=F) # NB. a+b etc. is not executed in R
-   # as an expression
-   # > e=parse(text="{x=a+b; y=a-b}")
-   # > code=rex2arma(e, exec=F)
-   # to execute the produced code:
-   # > (result=eval(parse(text=code)))
-   # or simply
-   # > (result=rex2arma("a+b"))
-   
-   # Limitations:
-   # - expression must include only numeric matrices and vectors;
-   # - no subscripting
-   # - no implicit vector recycling in terme-by-term operations
-   # - no loops for, while etc.
-   # - symbols "T" and "F" are converted to "true" and "false"
-   # - no global assignement '<<-'; (but take care of operations that can be done in-place)
-   # - and last but not least, no garanty that produced code works as
-   #   expected even if it compiles without error
-   # Allowed operators and calls are:
-   #   binary: '+', '-', '*', '/', '%*%', '%o%'
-   #   calls: t(), [qr.]solve(), ginv(), diag() (which extracts its diagonal from a matrix)
-   #          nrow(), ncol()
-   #   element-wise mathematical functions having the
-   #     same syntaxe in R and Armadillo: sqrt(), abs() etc.;
-   #
-   # Code conventions:
-   # R variables are considered as one of the following type (typeof(var) -> Rcpp; arma)
-   # (-"- means that the type has no its own equivalent in arma and kept as in Rcpp):
-   # - list -> List; -"-
-   # - character -> std::string; -"-
-   # - numeric -> double; -"-
-   # - double -> double; -"-"
-   # - integer -> int; sword
-   # - function -> Function; -"-
-   # - logical -> Logical; -"-
-   # Depending on dimension of {numeric, integer, character, logical} variable
-   # it can be one the following structures in Rcpp/arma:
-   # - c++ scalar/c++ scalar
-   # - {Numeric,Integer,Complex,Character}Vector/{vec,ivec,cx_vec,-"-}
-   # - {Numeric,Integer,Complex,Character}Matrix/{mat,imat,cx_mat,-"-}
 #browser()
    pfenv=parent.frame()
    probenv=new.env() # execute statements here to probe typeof(out)
+   if (!is.null(inpvars)) {
+      # populate probenv with input variables
+      for (it in inpvars) {
+         assign(it, get(it, env=pfenv), env=probenv)
+      }
+   }
    e=substitute(text)
    if (is.symbol(e)) {
       e=eval(e, env=pfenv)
@@ -163,7 +198,8 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
       }
       s1=if (is.call(st)) as.character(st[[1L]]) else as.character(st)
       if (is.symbol(st) || ! is.language(st) || s1 == "return" ||
-         (s1 != "=" && s1 != "<-" && s1 != "if" && s1 != "print")) {
+         (s1 != "=" && s1 != "<-" && s1 != "if" && s1 != "print"
+         && s1 != "for" && s1 != "if" && s1 != "while")) {
          # it must be the last statement before return
          if (i != length(e)) {
             stop(sprintf("Statement '%s' is not assignement. It mus be the last one in the list", format(st)))
@@ -255,8 +291,10 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
          }
          if (!is.symbol(eq[[2L]]) && as.character(eq[[2L]][[1L]]) == "[") {
             out=as.character(eq[[2L]][[2L]])
+            lhs=format(eq[[2L]])
          } else {
             out=as.character(eq[[2L]])
+            lhs=out
          }
          out=gsub("\\.", "_", out)
          if (! out %in% known) {
@@ -268,7 +306,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
             if (s1 =="for") {
                rhs=sprintf("head(%s, 1L)", rhs)
             }
-            eval(parse(t=sprintf("%s=%s", out, rhs)), env=probenv)
+            eval(parse(t=sprintf("%s=%s", lhs, rhs)), env=probenv)
             var_typeof=rbind(var_typeof, get_vartype(out, probenv))
             rownames(var_typeof)[nrow(var_typeof)]=out
             var_dims[[out]]=symdim(as.symbol(out), probenv, var_dims)

@@ -1,27 +1,28 @@
-# 2014-11-03
-# Author: Serguei Sokol, sokol@insa-toulouse.fr
-# Licence of RcppArmadillo applies here
-# Copyright 2014, INRA, France
+#' Get symbolic dimension of a statement (as an R code)
+#' 
+#' @param st A statements, i.e. an item in a list obtained as result of
+#' e.g. quote(a+b) or expression(a+b)
+#' @param env An environement where a statement can be executed to get
+#'  its type and structure.
+#' @param dim_tab A named list caching symbolic dimensions for R symbols.
+#'
+#' @return a character vector:\enumerate{
+#' \item of legth 2 for a matrix \code{mat}, it returns
+#'  \code{c("nrow(mat)", "ncol(mat)")}
+#' \item of length 1 for a vector, e.g. "length(vec)"
+#' \item a string "1" for a scalar}
+#' @details
+#' If some error occurs, a NA is returned
+#' The objects from the statement \code{st} are searched for in \code{env}
+#' if dim_tab is NULL or an object is not there.
+#
+#' @examples
+#' a=b=c=1:2
+#' lapply(parse(t="x <- a%*%(b+c); y=a+b"), symdim)
+#' # or
+#' symdim(expression(x <- a%*%(b+c))[[1L]])
 
 symdim=function(st, env=parent.frame(), dim_tab=NULL) {
-   # Get symbolic dimension (as an R code) of a statement in st
-   # Statements are items in a list obtained as result of
-   # e.g. quote(a+b)
-   # return a character vector:
-   # - of legth 2 for a matrix, e.g. c("nrow(mat)", "ncol(mat)")
-   # - of length 1 for a vector, e.g. "length(vec)"
-   # - a string "1" for a scalar
-   # e.g. for a matrix a, symdim(a) should return c("nrow(a)", "ncol(a)")
-   # If some error occurs, a NA is returned
-   # The argument 'dim_tab' is a named list or env where object
-   # symbolic dimensions are retrieved from. 
-   # The argument 'env' is where objects from the statement are searched for
-   # if dim_tab is NULL or an object is not there.
-   #
-   # Usage:
-   # > lapply(parse(t="x=a%*%(b+c); y=a+b"), symdim)
-   # or simply
-   # > symdim(parse(t="x=a%*%(b+c)")[[1L]])
 #browser()
 
    if (!is.call(st) || as.character(st[[1L]]) == "$") {
@@ -273,6 +274,23 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
    return(NA)
 }
 
+#' Translate an elementary R statement to RcppArmadillo
+#'
+#' @param st A statement to transalte
+#' @param call2arma A named character vector giving Armadillo equivalence
+#'  for some R functions. It is indexed by R function names.
+#' @param indent A character string used as indentation. It is incremented
+#'  by "   " (3 spaces) inside a \code{{...}} block.
+#' @param iftern A logical indicating whether \code{if/else} must be
+#'  considered as a ternary operator (TRUE) or a classical \code{if/else}
+#'  operator (FALSE).
+#' @param env An environment where statement may be executed.
+#' @param ... Parameters passed through to \code{symdim()} calls.
+#' @return A string with RcppArmadillo code.
+#'
+#' @details
+#' Parameter \code{env} is also passed to \code{symdim()} with \code{...}.
+
 st2arma=function(
 st,
 call2arma=c("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
@@ -282,12 +300,6 @@ indent="",
 iftern=FALSE,
 env=parent.frame(),
 ...) {
-   # Translate an R statement st (from a parsed expression) to RcppArmadillo
-   # code which is returned as a string.
-   # For nested blocks in curved brackets "{...}", indent is incremented.
-   # If 'iftern==TRUE', "if" operator is translated as ternary operator "a?b:c"
-   # env is environment where some expressions are evaluated to get there R type and dimension
-   # Parameters in ... and 'env' are passed to symdim().
    if (!is.call(st)) {
       s1=as.character(st)
       if (is.character(st)) {
@@ -397,9 +409,12 @@ env=parent.frame(),
             indent, begend[1L], begend[2L], counter, begend[1L],
             counter, begend[2L], counter, args[3L]))
       } else {
-         # other types of "for" are not ready yet
-         stop("This type of 'for' loop '%s' is not yet implemented")
+         # use c++11 construct
+         return(sprintf("%sfor (%s : %s) %s", indent, args[1L], args[2L], args[3L]))
       }
+   }
+   if (s1 == "while") {
+      return(sprintf("%swhile (%s) %s", indent, args[1L], args[2L]))
    }
    if (s1 == "return") {
       return(sprintf("return wrap(%s)", args[1L]))
@@ -754,8 +769,15 @@ env=parent.frame(),
    }
    return(res)
 }
+
+#' Determine if an R object is a scalar, vector or matrix
+#'
+#' @param obj An R object. Must be a vector or matrix.
+#' @return "s" for a scalar, "v" for a vector and "m" for matrix
+#'
+#' @details
+#' An object is considered as a scalar if it has a length 1.
 svm=function(obj) {
-   # return "s" for a scalar, "v" for a vector and "m" for matrix
    len=length(obj)
    if (len == 1) {
        # to be cast a scalar, it is a vector who must be of length 1, not a matrix
@@ -770,6 +792,12 @@ svm=function(obj) {
    # for not scalar, vector, matrix
    return(NA)
 }
+
+#' Converts R typeof() to Rcpp and Armadillo types
+#'
+#' @param r A string resulting from \code{typeof()} call
+#' @return A named character vector of length three who's components
+#' are named "r", "rcpp" and "arma".
 rtype2rcpparma=function(r) {
    return(switch(r,
       "function"=c(r=r, rcpp="Function", arma=NA),
@@ -783,6 +811,13 @@ rtype2rcpparma=function(r) {
       c(r=r, rcpp="SEXP", arma=NA)
    ))
 }
+
+#' Get a string for variable declaration in RcppArmadillo code.
+#' @param var An R object
+#' @param env An R environment
+#' @return the same as \code{\link{rtype2rcpparma}}
+#' @details
+#' This function is just a wrapper for \code{\link{rtype2rcpparma}}
 get_vartype=function(var, env=parent.frame()) {
    # return a named character vector of r, rcpp and arma types that can be used in variable declarations
    # together with struct (one of scalar, vector, matrix if applicable)
@@ -790,8 +825,14 @@ get_vartype=function(var, env=parent.frame()) {
    obj=eval(var, env=env)
    return(rtype2rcpparma(typeof(obj)))
 }
+
+#' Get a string with variable declaration in RcppArmadillo code
+#'
+#' @param t A character vector as returned by \code{\link{rtype2rcpparma}}
+#' @param d A character vector as returned by \code{\link{symdim}} or
+#'  \code{\link{svm}}
+#' @return a named vector with rcpp and arma part of declarations
 get_decl=function(t, d) {
-   # return a named vector with rcpp and arma part of declarations
    # as scalar, vector or matrix.
    # t is a three element vector, d is a vector of symbolic dimensions
    # or a string "s", "v" or "m"
@@ -838,6 +879,11 @@ get_decl=function(t, d) {
    # by default, give just typeof
    return(t[c("rcpp", "arma")])
 }
+
+#' Get assignment operators
+#'
+#' @param st An R statement
+#' @return A list with of assignment statements inside \code{st}
 get_assign=function(st) {
    # go through the tree of statments to gather and return assignements and
    # for loop begining
