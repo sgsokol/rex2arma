@@ -5,7 +5,9 @@ require(rbenchmark)
 require(RcppKalman)
 require(expm)
 #source("../rex2arma.inc.R"); source("../rex2arma.R")
-require(Rcpp, lib="~/.R/library")
+#require(Rcpp, lib="~/.R/library")
+require(Rcpp)
+
 
 
 # The original R code for expm(A) by a method of Higham is accessible
