@@ -108,7 +108,7 @@
 #' - {Integer,Numeric,Complex,Character}Vector/{ivec,vec,cx_vec,-"-}
 #' - {Integer,Numeric,Complex,Character}Matrix/{imat,mat,cx_mat,-"-}
 
-rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL) {
+rex2arma=function(text, fname=if (is.function(text)) sprintf("%s_arma_", as.character(substitute(text))) else "rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL) {
 #browser()
    pfenv=parent.frame()
    probenv=new.env() # execute statements here to probe typeof(out)
@@ -170,7 +170,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
       s1="" # first item in st
       st=e[[i]] # current statement
       # declare R functin calls of type package::func()
-      pada=getParseData(parse(t=if (is.call(st)) format(st) else as.character(st)))
+      pada=getParseData(parse(t=if (is.call(st)) format1(st) else as.character(st)))
       # function calls
       ifu=which(pada$token == "SYMBOL_FUNCTION_CALL")
       # namespace "::" operator
@@ -202,7 +202,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
          && s1 != "for" && s1 != "if" && s1 != "while")) {
          # it must be the last statement before return
          if (i != length(e)) {
-            stop(sprintf("Statement '%s' is not assignement. It mus be the last one in the list", format(st)))
+            stop(sprintf("Statement '%s' is not assignement. It mus be the last one in the list", format1(st)))
          }
          # prepare return
          ret=st2arma(st, indent=indent, iftern=TRUE, env=probenv, dim_tab=var_dims)
@@ -239,8 +239,8 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
          di=setdiff(setdiff(ins, outv), inps)
          inps=c(inps, di)
       }
-#browser()
-      #pada=getParseData(parse(t=format(st)))
+browser()
+      #pada=getParseData(parse(t=format1(st)))
       #ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN" |
       #   pada$token=="IN")
       # gather out vars in assignements and for loops (because of "if" and "for" blocks, it may be many)
@@ -251,12 +251,7 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
          }
          # get ins var
          s1=as.character(eq[[1L]])
-         if (s1 == "if") {
-            rhs=if (is.call(eq[[2L]])) format(eq[[2L]]) else as.character(eq[[2L]])
-         } else {
-            rhs=if (!is.call(eq[[3L]])) as.character(eq[[3L]]) else
-               format(eq[[3L]])
-         }
+         rhs=format1(if (s1 == "if") rhs_eq(eq[[2L]]) else rhs_eq(eq[[3L]]))
          pada=getParseData(parse(t=rhs))
          # exclude from ins list member with "$"
          isy=which(pada$token=="SYMBOL")
@@ -289,30 +284,42 @@ rex2arma=function(text, fname="rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, 
             # no out in this operator
             next
          }
-         if (!is.symbol(eq[[2L]]) && as.character(eq[[2L]][[1L]]) == "[") {
-            out=as.character(eq[[2L]][[2L]])
-            lhs=format(eq[[2L]])
-         } else {
-            out=as.character(eq[[2L]])
-            lhs=out
+         out=lhs=c()
+         eq_chain=TRUE
+         while (eq_chain) {
+            if (!is.symbol(eq[[2L]]) && as.character(eq[[2L]][[1L]]) == "[") {
+               tmp=format1(eq[[2L]][[2L]])
+               attr(tmp, "lhs")=format1(eq[[2L]])
+               out=c(format1(eq[[2L]][[2L]]), out)
+               lhs=c(format1(eq[[2L]]), lhs)
+            } else {
+               tmp=format1(eq[[2L]])
+               out=c(tmp, out)
+               lhs=c(tmp, lhs)
+            }
+            eq_chain=is.call(eq[[3L]]) && (eq[[3]][[1]] == as.symbol("<-") || eq[[3]][[1]] == as.symbol("="))
+            if (eq_chain)
+               eq <- eq[[3L]]
          }
          out=gsub("\\.", "_", out)
-         if (! out %in% known) {
+         if (! all(out %in% known)) {
             outv=c(outv, out)
          }
-         if (! out %in% known) {
+         # rhs for probe execution
+         if (s1 =="for") {
+            rhs=sprintf("head(%s, 1L)", rhs)
+         }
 #browser()
-            # rhs for probe execution
-            if (s1 =="for") {
-               rhs=sprintf("head(%s, 1L)", rhs)
-            }
-            eval(parse(t=sprintf("%s=%s", lhs, rhs)), env=probenv)
-            var_typeof=rbind(var_typeof, get_vartype(out, probenv))
-            rownames(var_typeof)[nrow(var_typeof)]=out
-            var_dims[[out]]=symdim(as.symbol(out), probenv, var_dims)
-            var_decl=rbind(var_decl, get_decl(var_typeof[out,], var_dims[[out]]))
-            rownames(var_decl)[nrow(var_decl)]=out
-            known=c(known, out)
+         for (i in seq_along(out)) {
+            if (out[i] %in% known)
+               next
+            eval(parse(t=sprintf("%s=%s", lhs[i], rhs)), env=probenv)
+            var_typeof=rbind(var_typeof, get_vartype(out[i], probenv))
+            rownames(var_typeof)[nrow(var_typeof)]=out[i]
+            var_dims[[out[i]]]=symdim(parse(t=out[i]), probenv, var_dims)
+            var_decl=rbind(var_decl, get_decl(var_typeof[out[i],], var_dims[[out[i]]]))
+            rownames(var_decl)[nrow(var_decl)]=out[i]
+            known=c(known, out[i])
          }
       }
 #browser()
