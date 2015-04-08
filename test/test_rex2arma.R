@@ -1,9 +1,10 @@
 # unit tests of rex2arma()
-source("rex2arma.R")
+library("rex2arma")
+library("Rcpp")
 rebuild=FALSE
 
 # prepare inputs
-n=3
+n=10
 set.seed(7)
 
 # scalars
@@ -53,6 +54,25 @@ for (o in op) {
       e=parse(t=sprintf("{%s}", src))
       if (!all.equal(c(rex2arma(e, r=rebuild)), c(eval(e)))) {
          stop(sprintf("test 'e'", e))
+      }
+   }
+}
+
+# function specific test
+f="head"
+# one argument
+for (a in c("v", "m")) {
+   src=sprintf("%s(%s1)", f, a)
+   if (!all.equal(c(rex2arma(src, r=rebuild)), c(eval(parse(t=src))))) {
+      stop(sprintf("test '%s' failed", src))
+   }
+}
+# second argument is small positive, big positive, small negative, big negative, zero
+for (nh in c(3, n+3, -3, -3-n, 0)) {
+   for (a in c("v", "m")) {
+      src=sprintf("%s(%s1, %s)", f, a, nh)
+      if (!all.equal(c(rex2arma(src, r=rebuild)), c(eval(parse(t=src))))) {
+         stop(sprintf("test '%s' failed", src))
       }
    }
 }
