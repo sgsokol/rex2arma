@@ -266,7 +266,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       # getting subvector
       return(dims[[2L]])
    }
-   if (s1 == "(") {
+   if (any(s1 == c("(", "sqrt", "sin", "cos", "tan", "sinpi", "cospi", "tanpi", "atan", "exp", "sinh", "cosh", "tanh", "asin", "acos", "atan"))) {
       # pass through the dims of the first argument
       return(dims[[1L]])
    }
@@ -285,6 +285,13 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
          res=c(res, dims[[1L]][2L])
       }
       return(res)
+   }
+   if ((s1[1] == c("d", "p", "q", "r")) && any(s1[-1] == c("norm", "gamma", "beta", "cauchy", "chisq", "exp", "geom", "f", "hyper", "lnorm", "multinom", "nbinom", "pois", "t", "unif", "weibull", "signrank", "tukey", "wilcox"))) {
+      if (lens[1L] == 1L && dims[1] == "1") {
+         return("1")
+      } else {
+         return(sprintf("length(%s)", format1(st[[2]])))
+      }
    }
    
    # by default
@@ -321,6 +328,9 @@ env=parent.frame(),
    if (is.null(st)) {
       return("R_NilValue")
    }
+   if (typeof(st) == "logical" && is.na(st)) {
+      return("datum::nan")
+   }
    if (!is.call(st)) {
       s1=as.character(st)
       if (is.character(st)) {
@@ -349,7 +359,7 @@ env=parent.frame(),
 #cat("find ", s1, "\n", sep="")
          pkg=find(s1, mode="function")
          if (length(pkg)) {
-            if (! "package:base" %in% pkg) {
+            if (! ("package:base" %in% pkg || "package:stats" %in% pkg)) {
                pkg=pkg[1L]
                if (s1 != "ginv" && s1 != "head" && pkg != "package:base") {
                   # prepend package name for external R function
@@ -370,7 +380,13 @@ env=parent.frame(),
    if (s1 == "=" || s1 == "<-") {
       # populate env with results of this operator
       eval(st, env=env)
-      return(sprintf("%s%s=%s;\n", indent, args[1L], args[2L]))
+      rhs=eval(st[[3]], envir=env)
+      svm_r=svm(rhs)
+      if (is.call(st[[3]]) && st[[3]][[1]] != as.symbol("<-") && st[[3]][[1]] != as.symbol("=") && svm_r == "s") {
+         return(sprintf("%s%s=as<%s>(%s);\n", indent, args[1L], get_decl(get_vartype(rhs), svm_r)["arma"], args[2L]))
+      } else {
+         return(sprintf("%s%s=%s;\n", indent, args[1L], args[2L]))
+      }
    }
    nms=names(args)
    if (!is.null(nms)) {
@@ -403,7 +419,7 @@ env=parent.frame(),
             args[isca]=sprintf("(%s)-1", args[isca])
          }
          if (length(inu)) {
-            args[inu]=st[[inu+2]]-1
+            args[inu]=sapply(inu+2, getElement, object=st)-1
          }
          args[args==""]="span()"
          irange=which(sapply(st[-(1:2)], function(s) is.call(s) && as.character(s[[1L]]) == ":"))
@@ -415,7 +431,7 @@ env=parent.frame(),
                if (is.numeric(e)) e-1L else paste(e,1,sep="-")
             )
          }
-         return(sprintf("%s(%s)", s1, paste(args, collapse=", ")))
+         return(sprintf("vectorise(%s(%s))", s1, paste(args, collapse=", ")))
       }
    }
    if (s1 == "head") {
@@ -711,6 +727,36 @@ env=parent.frame(),
       return(sprintf("as<%svec>(rep_r_(%s))", rtype2rcpparma(t)["arma"],
          paste(nms, args, sep="", collapse=", ")))
    }
+   if (s1 == "matrix") {
+      # normalize arguments
+      stdarg=formals(args(matrix))
+      marg=as.list(match.call(matrix, st))[-1]
+      allarg=modifyList(stdarg, marg)
+      svm_data=svm(allarg[["data"]])
+      args=sapply(allarg, st2arma, call2arma, indent, iftern, env, ...)
+      if (all(is.na(allarg[["data"]]))) {
+         rtype=""
+      } else {
+         rtype=rtype2rcpparma(typeof(eval(allarg[["data"]], env=env)))["arma"]
+      }
+      if (allarg[["byrow"]]) {
+         # inverse nrow and ncol, then transpose the matrix
+         tmp=args["nrow"]
+         args["nrow"]=args["ncol"]
+         args["ncol"]=tmp
+         transp=sprintf(".%st()", if (rtype == "complex") "s" else "")
+      } else {
+         transp=""
+      }
+      if (svm_data == "s") {
+         # data is a scalar
+         res=sprintf("%smat(%s, %s).fill(%s)%s", rtype, args["nrow"], args["ncol"], args["data"], transp)
+      } else {
+         # data is a vector or matrix
+         res=sprintf("%smat(%s).resize(%s, %s)%s", rtype, args["data"], args["nrow"], args["ncol"], transp)
+      }
+      return(res)
+   }
    
    # mono argument functions
    if (s1 == "diag") {
@@ -766,7 +812,7 @@ env=parent.frame(),
       return(sprintf("(%s).n_cols", args[1L]))
    }
    if (s1 == "dim") {
-      return(sprintf("ivec(IntegerVector::create(%s.n_rows, %s.n_cols))", args[1L], args[1L]))
+      return(sprintf("ivec({%s.n_rows, %s.n_cols})", args[1L], args[1L]))
    }
    if (s1 == "length") {
       return(sprintf("%s.size()", args[1L]))
@@ -801,6 +847,27 @@ env=parent.frame(),
          return(sprintf('%sRcout << "%s=" << %s << endl;\n', indent, args[1L], args[1L]))
       }
       return(sprintf('%s%s.print(Rcout, "%s=");\n', indent, args[1L], args[1L]))
+   }
+   # probability functions
+   if (any(substr(s1, 1, 1) == c("d", "p", "q", "r")) && any(substring(s1, 2) == c("gamma", "exp", "norm", "beta", "cauchy", "chisq", "geom", "f", "hyper", "lnorm", "multinom", "nbinom", "pois", "t", "unif", "weibull", "signrank", "tukey", "wilcox"))) {
+      # matched call
+      mc=as.list(match.call(get(s1, mode="function"), st))[-1]
+      mc[]=args
+      if (!is.null(mc[["rate"]])) {
+         # inverse the rate
+         mc[["rate"]]=sprintf("1./(%s)", mc[["rate"]])
+      } else if (!is.null(mc[["scale"]])) {
+         mc[["rate"]]=mc[["scale"]]
+         mc[["scale"]]=NULL
+      }
+      # formal args
+      fa=modifyList(lapply(formals(s1), format1), mc)
+      fa[fa == "FALSE"]="false"
+      fa[fa == "TRUE"]="true"
+      fa["scale"]=NULL
+      r_pref=if (substr(s1, 1, 1) == "r") "" else "R::" # generator is not from R::
+      res=sprintf("%s%s(%s)", r_pref, s1, paste(fa, sep="", collapse=", "))
+      return(res)
    }
    if (s1 %in% names(call2arma)) {
       # simply translate function names
@@ -855,6 +922,7 @@ rtype2rcpparma=function(r) {
       "environment"=c(r=r, rcpp="Environment", arma=NA),
       "function"=c(r=r, rcpp="Function", arma=NA),
       "list"=c(r=r, rcpp="List", arma=NA),
+      "complex"=c(r=r, rcpp="Complex", arma="cx_"),
       "character"=c(r=r, rcpp="Character", arma=NA),
       "numeric"=c(r=r, rcpp="Numeric", arma=""),
       "double"=c(r=r, rcpp="Numeric", arma=""),
@@ -876,7 +944,11 @@ get_vartype=function(var, env=parent.frame()) {
    # together with struct (one of scalar, vector, matrix if applicable)
    if (is.character(var)) var=parse(t=var)
    obj=eval(var, env=env)
-   return(rtype2rcpparma(typeof(obj)))
+   if (all(is.na(obj))) {
+      return(rtype2rcpparma("double"))
+   } else {
+      return(rtype2rcpparma(typeof(obj)))
+   }
 }
 
 #' Get a string with variable declaration in RcppArmadillo code

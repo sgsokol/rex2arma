@@ -1,17 +1,11 @@
 Package: rex2arma
 Type: Package
-Title: Convertion of a (relativly simple) R code to RcppArmadillo code
-Version: 0.4
-Date: 2014-11-27
+Title: Convertion of R Code to RcppArmadillo Code
+Version: 0.5
+Date: 2015-06-11
 Author: Serguei Sokol
 Maintainer: Serguei Sokol  <sokol@insa-toulouse.fr>
-Description: rex2arma is aimed to automatise the converion of R code doing
-    heavy matrix/vector manipulations into RcppArmadillo code. Some limitations
-    on a code that can be converted apply, e.g. no type changing in the
-    function body, no global assignements and so on. Several types of variables
-    are supported (logical, integer, numeric, complex, character) as well as
-    data structures (scalars, vectors, matrices, lists). For code control, user
-    can use 'if/else' (also as ternary operator), 'for' loop.
+Description: Automatic converion of R code (linear algebra and alike) into RcppArmadillo code.
 License: GPL-2
 Suggests:
     Rcpp,

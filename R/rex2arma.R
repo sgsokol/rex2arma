@@ -169,7 +169,7 @@ rex2arma=function(text, fname=if (is.function(text)) sprintf("%s_arma_", as.char
       ins=c() # input vars -"-
       s1="" # first item in st
       st=e[[i]] # current statement
-      # declare R functin calls of type package::func()
+      # declare R function calls of type package::func()
       pada=getParseData(parse(t=if (is.call(st)) format1(st) else as.character(st)))
       # function calls
       ifu=which(pada$token == "SYMBOL_FUNCTION_CALL")
@@ -184,10 +184,11 @@ rex2arma=function(text, fname=if (is.function(text)) sprintf("%s_arma_", as.char
          fun_decl=c(fun_decl, sprintf('%sFunction %s=Environment("package:%s")["%s"];\n',
             indent, pfun, pkg, fun))
       }
-      # alone functions other than from package:base
+      # declare only functions other than from package:base and package:stats
+      # for these two we repose on rcpp sugar
       fun=pada$text[ifu[!ins_get]]
       pkg=sapply(fun, function(f) { p=find(f, mode="function"); if ("package:base" %in% p) "package:base" else p[1]})
-      inb=pkg != "package:base"
+      inb=pkg != "package:base" & pkg != "package:stats"
       fun=fun[inb]
       pkg=substring(pkg[inb], 9L)
       if (length(fun)) {
@@ -239,7 +240,7 @@ rex2arma=function(text, fname=if (is.function(text)) sprintf("%s_arma_", as.char
          di=setdiff(setdiff(ins, outv), inps)
          inps=c(inps, di)
       }
-browser()
+#browser()
       #pada=getParseData(parse(t=format1(st)))
       #ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN" |
       #   pada$token=="IN")
@@ -409,6 +410,8 @@ browser()
       fun_decl=sort(unique(fun_decl))
    }
    body=sprintf('
+   // for random generator
+   RNGScope scope;
    // auxiliary functions
    Environment base_env_r_=Environment::base_env();
    Function rep_r_=base_env_r_["rep"];
@@ -424,7 +427,7 @@ browser()
 %s', paste(fun_decl, collapse=""), paste(decl, collapse=""), out_decl, code, ret)
    
    code=sprintf("
-cppFunction(depends='RcppArmadillo', rebuild=%s, includes='
+Rcpp::cppFunction(depends='RcppArmadillo', rebuild=%s, includes='
 using namespace arma;
 
 template <typename T>
