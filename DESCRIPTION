@@ -5,8 +5,11 @@ Version: 0.5
 Date: 2015-06-11
 Author: Serguei Sokol
 Maintainer: Serguei Sokol  <sokol@insa-toulouse.fr>
-Description: Automatic converion of R code (linear algebra and alike) into RcppArmadillo code.
+Description: Automatic converion of R code (linear algebra and alike) into
+    RcppArmadillo code.
+SystemRequirements: C++11
 License: GPL-2
 Suggests:
     Rcpp,
     RcppArmadillo
+RoxygenNote: 6.0.1

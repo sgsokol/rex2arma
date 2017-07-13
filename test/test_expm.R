@@ -30,6 +30,8 @@ require(Rcpp)
 # version with the three above corrections is in expm.higham.R
 
 # get R code
+
+library(expm) # for balance()
 source("expm.higham.R") # create expm.higham() function
 
 # translate it in C++ expm_cpp() function
