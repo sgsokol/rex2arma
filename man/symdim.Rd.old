@@ -1,0 +1,284 @@
+\name{symdim}
+\alias{symdim}
+%- Also NEED an '\alias' for EACH other topic documented here.
+\title{
+%%  ~~function to do ... ~~
+}
+\description{
+%%  ~~ A concise (1-5 lines) description of what the function does. ~~
+}
+\usage{
+symdim(st, env = parent.frame(), dim_tab = NULL)
+}
+%- maybe also 'usage' for other objects documented here.
+\arguments{
+  \item{st}{
+%%     ~~Describe \code{st} here~~
+}
+  \item{env}{
+%%     ~~Describe \code{env} here~~
+}
+  \item{dim_tab}{
+%%     ~~Describe \code{dim_tab} here~~
+}
+}
+\details{
+%%  ~~ If necessary, more details than the description above ~~
+}
+\value{
+%%  ~Describe the value returned
+%%  If it is a LIST, use
+%%  \item{comp1 }{Description of 'comp1'}
+%%  \item{comp2 }{Description of 'comp2'}
+%% ...
+}
+\references{
+%% ~put references to the literature/web site here ~
+}
+\author{
+%%  ~~who you are~~
+}
+\note{
+%%  ~~further notes~~
+}
+
+%% ~Make other sections like Warning with \section{Warning }{....} ~
+
+\seealso{
+%% ~~objects to See Also as \code{\link{help}}, ~~~
+}
+\examples{
+##---- Should be DIRECTLY executable !! ----
+##-- ==>  Define data, use random,
+##--	or do  help(data=index)  for the standard data sets.
+
+## The function is currently defined as
+function (st, env = parent.frame(), dim_tab = NULL) 
+{
+    if (!is.call(st) || as.character(st[[1L]]) == "$") {
+        s1 = gsub("\\.", "_", if (is.call(st)) 
+            format(st)
+        else as.character(st))
+        if (s1 \%in\% names(dim_tab)) {
+            return(dim_tab[[s1]])
+        }
+        else if (s1 == "") {
+            return("")
+        }
+        else {
+            obj = eval(st, env = env)
+            len = length(obj)
+            if (len == 1) {
+                return("1")
+            }
+            if (is.matrix(obj) || is(obj, "Matrix")) {
+                return(c(sprintf("nrow(\%s)", s1), sprintf("ncol(\%s)", 
+                  s1)))
+            }
+            if (is.vector(obj)) {
+                return(sprintf("length(\%s)", s1))
+            }
+            return(NA)
+        }
+    }
+    if (is.numeric(st) || is.logical(st) || is.character(st)) {
+        return("1")
+    }
+    s1 = as.character(st[[1L]])
+    t1 = typeof(st[[1L]])
+    m1 = mode(st[[1L]])
+    lenst = length(st)
+    if (s1 \%in\% c("=", "<-")) {
+        return(symdim(st[[3L]], env, dim_tab))
+    }
+    dims = lapply(st[-1], symdim, env, dim_tab)
+    lens = sapply(dims, length)
+    if (any(s1 == c("+", "-", "*", "/", "^", ">", "<", "<=", 
+        ">=", "!=", "==")) && lenst == 3L) {
+        d1 = dims[[1L]]
+        l1 = length(d1)
+        d2 = dims[[2L]]
+        l2 = length(d2)
+        if (l2 > l1) {
+            return(d2)
+        }
+        else if (l1 > l2) {
+            return(d1)
+        }
+        else if (l1 == 1L) {
+            return(c(d2, d1)[(nchar(d1) >= nchar(d2)) + 1L])
+        }
+        else {
+            return(d1)
+        }
+    }
+    if (any(s1 == c("+", "-")) && lenst == 2L) {
+        return(dims[[1L]])
+    }
+    if (any(s1 == c("t", "ginv"))) {
+        d1 = dims[[1L]]
+        l1 = length(d1)
+        if (l1 == 1L) {
+            return(c("1", d1))
+        }
+        else {
+            return(rev(d1))
+        }
+    }
+    if (s1 == "\%o\%") {
+        return(c(dims[[1L]], dims[[2L]]))
+    }
+    if (any(s1 == c("\%*\%", "crossprod", "tcrossprod"))) {
+        d1 = dims[[1L]]
+        l1 = length(d1)
+        if (lenst > 2L) {
+            d2 = dims[[2L]]
+            l2 = length(d2)
+        }
+        else {
+            d2 = d1
+            l2 = l1
+        }
+        if (s1 == "crossprod") {
+            d1 = rev(d1)
+        }
+        else if (s1 == "tcrossprod") {
+            if (l2 == 1L) {
+                d2 = c("1", d2)
+                l2 = 2L
+            }
+            else {
+                d2 = rev(d2)
+            }
+        }
+        if (l1 == 1L && l2 == 1L) {
+            return("1")
+        }
+        else if (l1 == 2L && l2 == 1L) {
+            if (d1[1L] == "1") {
+                return("1")
+            }
+            else {
+                return(c(d1[1L], "1"))
+            }
+        }
+        else if (l1 == 1L && l2 == 2L) {
+            if (d2[1L] == "1") {
+                return(c(d1, d2[2L]))
+            }
+            else {
+                return(c("1", d2[2L]))
+            }
+        }
+        else {
+            return(c(d1[1L], d2[2L]))
+        }
+        return(dims[[1L]])
+    }
+    if (s1 \%in\% c("sum", "prod", "nrow", "ncol", "length", "mean", 
+        "min", "max", "sd", "norm")) {
+        return("1")
+    }
+    if (s1 == "var") {
+        if (lens[1L] == 2L) {
+            return(c(dims[[1L]][2L], dims[[1L]][2L]))
+        }
+        else {
+            return("1")
+        }
+    }
+    if (s1 == "dim") {
+        return(lens[1L])
+    }
+    if (s1 == "c") {
+        return(sprintf("\%s", paste(sapply(dims, function(d) if (length(d) > 
+            1L) paste(d, collapse = "*") else d), collapse = "+")))
+    }
+    if (s1 \%in\% c("solve", "qr.solve")) {
+        return(dims[[lenst - 1L]])
+    }
+    if (s1 == "diag" || s1 == "Diagonal") {
+        if (lenst == 2L && lenst[1L] == 2L) {
+            return(dims[[1L]][2L])
+        }
+        else {
+            alast = format(st[[lenst]])
+            return(c(alast, alast))
+        }
+    }
+    if (s1 \%in\% c(":", "seq")) {
+        if (s1 == ":" && st[[2L]] == st[[3L]]) {
+            return("1")
+        }
+        return(sprintf("length(\%s)", format(st)))
+    }
+    if (s1 == "rep") {
+        args = sapply(st[-1L], function(it) if (is.call(it)) 
+            format(it)
+        else as.character(it))
+        times = which(!is.na(pmatch(names(st[-1L]), "times")))
+        if (length(times) > 1L) {
+            stop(sprintf("Argument 'times' was found more than once in '\%s'", 
+                format(st)))
+        }
+        each = which(!is.na(pmatch(names(st[-1L]), "each")))
+        if (length(each) > 1L) {
+            stop(sprintf("Argument 'each' was found more than once in '\%s'", 
+                format(st)))
+        }
+        x = which(!is.na(pmatch(names(st[-1L]), "x")))
+        if (length(x) > 1L) {
+            stop(sprintf("Argument 'x' was found more than once in '\%s'", 
+                format(st)))
+        }
+        if (length(x) == 0L) {
+            x = which.max(nchar(args) == 0L)
+        }
+        if (length(times) == 0L) {
+            times = which(nchar(args[-x]) == 0L)
+            if (length(times)) {
+                times = times[1L]
+                times = times + (times >= x)
+            }
+        }
+        if (length(times) && lens[times] == 1L && dims[[times]] == 
+            "1") {
+            res = sprintf("\%s*(\%s)", paste("(", dims[[x]], ")", 
+                sep = "", collapse = "*"), args[times])
+        }
+        else if (length(times) && lens[times] == 1L) {
+            res = sprintf("sum(\%s)", args[times])
+        }
+        else if (length(times) == 0L) {
+            res = sprintf("\%s", paste("(", dims[[x]], ")", sep = "", 
+                collapse = "*"))
+        }
+        if (length(each)) {
+            res = sprintf("(\%s)*(\%s)", res, args[each])
+        }
+        return(res)
+    }
+    if (s1 == "[") {
+        if (max(lens[-1L]) > 1L) {
+            stopifnot(length(args) != 2L)
+            return(sprintf("nrow(\%s)", args[2L]))
+        }
+        if (lens[1L] > 1L) {
+            if (dims[[2L]] == "1" && dims[[3L]] == "1") {
+                return("1")
+            }
+            return(c(dims[[2L]], dims[[3L]]))
+        }
+        return(dims[[2L]])
+    }
+    if (s1 == "(") {
+        return(dims[[1L]])
+    }
+    warning(sprintf("Couldn't retrive dimension for '\%s'", format(st)))
+    return(NA)
+  }
+}
+% Add one or more standard keywords, see file 'KEYWORDS' in the
+% R documentation directory.
+\keyword{ ~kwd1 }
+\keyword{ ~kwd2 }% __ONLY ONE__ keyword per line
