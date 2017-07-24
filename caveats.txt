@@ -1,0 +1,8 @@
+# List of caveats for automatic R code translation to Rcpp code
+# started at 2017-07-19 by sokol@insa-toulouse.fr
+
+- Variables in C++ cannot change their types so pay attention to keep var type constant (counter example: 'consistency = TRUE; consistency = "finiteSample"'. Here, 'consistency' was logical at first, then became a string)
+- Ternary operator ("x=if (test) a else b" translated as "x=test ? a : b") must have the same type for both TRUE and FALSE test results. It must also have both parts ("a" and "b" in this example). Construct without "else" like "if (test) res" is not allowed as it has not its counterpart in C++;
+- in C++ there is no shorter vector replication to fill the requested size in result. So all manipulated matrices and vectors must have appropriate dimensions;
+- Operation c(vec, NULL) perfectly legal in R, cannot be translated in Rcpp, because NULL and vec are of different types.
+- Variable name 'scope' is reserved for RNGScope and hence cann't be used in R code;
