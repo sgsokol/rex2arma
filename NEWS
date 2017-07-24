@@ -1,0 +1,17 @@
+Version 0.6
+===============
+
+* 2017-07-24
+ new features in this release:
+  - recursive functions are now admitted (e.g. fib=function(n) if (n<2) n else fib(n-1)+fib(n-2))
+  - functions defined in functions are now admitted;
+  - exec parameter is made integer and '-1' was added to list of possible values;
+  - recursive use of rex2arma() is now possible (used for locally defined functions);
+  - added some basic unit tests;
+ fixed bugs most notable of which are:
+  - comparison expressions in indexing are now correctly translated with ".find()";
+  - a scalar can be assigned to a (sub)vector (".fill()" is used);
+  - probability distributions function work now with vector and scalar arguments (both as input and returned values);
+ acceptance tests passed:
+  - expm.higham (test/test_expm.R)
+  - scaleTau2 (test/test4rex2arma.R)
