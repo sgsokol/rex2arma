@@ -4,7 +4,7 @@
 #'  or an R function or a plain code.
 #' @param fname A string with a name for Rcpp function (if NULL,
 #'  default to rex_arma_)
-#' @param exec A logical or integer from {1, 2} (default TRUE).
+#' @param exec An integer from {-1, 0, 1, 2} (default 1).
 #' @param copy A logical saying to make or not a local copy of input
 #'  vectors/matrices (default TRUE, i.e. make a copy).
 #' @param rebuild A logical saying to rebuild or not previous Rcpp code
@@ -21,12 +21,16 @@
 #' If the \code{text} is a string it is parsed. If not, it must
 #' be a valid R expression or a function or a plain code (cf. Examples).
 #'
-#' If \code{exec==FALSE}, the RcppArmadillo code is not executed
-#' it is just returned as a string.
-#' If \code{exec==1}, the Rcpp function is created in the calling
-#'  environment but not executed.
-#' If \code{exec==2} or \code{TRUE}, than the c++ function is called too
-#'  and its output is returned as the result of rex2arma() call.
+#' If \enumerate {
+#'  \item \code{exec==0}: (default) the full RcppArmadillo code is not executed
+#'    it is just returned as a string;
+#'  \item \code{exec==-1}: the same as 0 but only translated code is returned,
+#'    i.e. without preamble, includes and Rcpp call;
+#'  \item \code{exec==1}: the Rcpp function is created in the calling
+#'    environment but not executed.
+#'  \item \code{exec==2}: the c++ function is created and called too.
+#'    Its output is returned as the result of rex2arma() call.
+#' }
 #'
 #' If \code{copy==TRUE}, objects inside the cpp code are created
 #' with memory copying.
@@ -108,7 +112,7 @@
 #' - {Integer,Numeric,Complex,Character}Vector/{ivec,vec,cx_vec,-"-}
 #' - {Integer,Numeric,Complex,Character}Matrix/{imat,mat,cx_mat,-"-}
 
-rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text))) sprintf("%s_arma_", deparse(substitute(text))) else "rex_arma_", exec=TRUE, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL, verbose=FALSE) {
+rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text))) sprintf("%s_arma_", deparse(substitute(text))) else "rex_arma_", exec=0, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL, verbose=FALSE, includes=character()) {
 #browser()
    mcall=match.call()
    fname=gsub(".", "_", fname, fixed=TRUE)
@@ -123,7 +127,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       }
    }
    ftype="SEXP"
-   e=substitute(text)
+   e=if (is.function(text)) text else substitute(text)
    retobj=NULL
    if (is.symbol(e)) {
        e=eval(e, env=pfenv)
@@ -134,13 +138,12 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       retobj=eval(e, env=pfenv)
    }
    if (is.function(e)) {
-      inpvars=names(formals(e))
-      fun_nm=deparse(substitute(text))
+      inpvars=sapply(names(formals(e)), gsub, pattern=".", replacement="_", fixed=TRUE)
 #print(call2a)
-      call2a[fun_nm] <<- fname
+      call2a[fname] <<- fname
 #print(call2a)
 #stop()
-      retobj=do.call(fun_nm, lapply(names(head(as.list(args(e)), -1)), function(a) get(a, envir=pfenv)))
+      retobj=do.call(e, lapply(names(head(as.list(args(e)), -1)), function(a) get(a, envir=pfenv)))
       e=body(e)
       if (class(e) == "{") {
          e=e[-1L]
@@ -181,6 +184,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    # declaration depending on the dim() of out
    outv=c()
    inps=c()
+   loc_inps=c()
    code=""
    ret=""
    var_dims=list()
@@ -188,6 +192,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    colnames(var_typeof)=c("r", "rcpp", "arma")
    var_decl=matrix(NA, nrow=0, ncol=2)
    fun_decl=c()
+   lfun_decl=c()
    colnames(var_decl)=c("rcpp", "arma")
    indent="   "
    for (i in 1:length(e)) {
@@ -215,10 +220,11 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       # for these two we rely on rcpp sugar
       fun=pada$text[ifu[!ins_get]]
       pkg=sapply(fun, function(f) { p=find(f, mode="function"); if ("package:base" %in% p) "package:base" else p[1]})
-      inb=pkg != "package:base" & pkg != "package:stats" & !(fun %in% names(call2a))
+      inb=pkg != "package:base" & pkg != "package:stats" & !(fun %in% names(call2a)) & !is.na(pkg)
       fun=fun[inb]
       pkg=pkg[inb]
       if (length(fun)) {
+#browser()
          # declare the functions if not yet done
          pfun=sprintf("%s_%s_r_", sub("\\.", "_", sub("package:", "", pkg)), fun)
          fun_decl=c(fun_decl, sprintf('%sFunction %s=Environment("%s")["%s"];\n',
@@ -228,13 +234,9 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       if (s1 == "<-")
          s1="="
       if (is.symbol(st) || ! is.language(st) || s1 == "return" ||
-         (s1 != "=" && s1 != "assign" && s1 != "if" && s1 != "print"
-         && s1 != "for" && s1 != "while")) {
+         (i == length(e))) {
 #browser()
-         # it must be the last statement before return
-         if (i != length(e)) {
-            stop(sprintf("Statement '%s' is not assignement. It mus be the last one in the list", format1(st)))
-         }
+         # if it is the last statement
          # prepare return
          ret=st2arma(st, indent=indent, iftern=TRUE, env=probenv, dim_tab=var_dims)
          if (s1 != "return") {
@@ -250,14 +252,14 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             ret=sprintf("%s%s;\n", indent, ret)
          }
          # exclude from ins list member with "$"
-         isy=which(pada$token=="SYMBOL")
-         idol=which(pada$token=="'$'")
+         isy=which(pada$token=="SYMBOL") # indexes of symbols (i.e. variable names)
+         idol=which(pada$token=="'$'") # indexes of dollar sign
          if (length(idol)) {
             idol=apply(outer(isy, idol, `-`), 2L, function(v) which.max(v > 0L))
             isy=isy[-idol]
          }
          insr=sort(unique(pada$text[isy]))
-         ins=gsub("\\.", "_", insr)
+         ins=gsub(".", "_", insr, fixed=TRUE)
          names(insr)=ins
          dc2r=c(dc2r, insr[ins!=insr])
          # add ins to probenv
@@ -266,8 +268,9 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          }
          # get typeof and declaration ins
          for (it in setdiff(ins, rownames(var_decl))) {
+            obj=probenv[[c2r(it, dc2r)]]
             # update var_typeof and dims
-            var_typeof=rbind(var_typeof, get_vartype(probenv[[c2r(it, dc2r)]]))
+            var_typeof=rbind(var_typeof, get_vartype(obj))
             var_dims[[it]]=symdim(as.symbol(c2r(it, dc2r)), probenv, var_dims)
             rownames(var_typeof)[nrow(var_typeof)]=it
             # update var_decl
@@ -283,25 +286,28 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       #pada=getParseData(parse(t=format1(st)))
       #ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN" |
       #   pada$token=="IN")
+      
       # gather out vars in assignements and for loops (because of "if" and "for" blocks, it may be many)
-      leq=get_assign(st) # list of equalities
+      leq=get_assign(st) # list of all equalities in the st
       for (eq in leq) {
          if (length(eq) == 0L) {
             next
          }
          # get ins var
          eq1=as.character(eq[[1L]])
+         rhs_is_fun=length(eq) > 2 && is.call(eq[[3]]) && as.character(eq[[3]][[1]]) == "function"
+         loc_inps=c(loc_inps, if (rhs_is_fun) names(eq[[3]][[2]]) else c())
          rhs=format1(if (eq1 == "if") rhs_eq(eq[[2L]]) else rhs_eq(eq[[3L]]))
          pada=getParseData(parse(t=rhs))
          # exclude from ins list member with "$"
-         isy=which(pada$token=="SYMBOL")
-         idol=which(pada$token=="'$'")
+         isy=which(pada$token == "SYMBOL")
+         idol=which(pada$token == "'$'")
          if (length(idol)) {
             idol=apply(outer(isy, idol, `-`), 2L, function(v) which.max(v > 0L))
             isy=isy[-idol]
          }
          insr=sort(unique(pada$text[isy]))
-         ins=gsub("\\.", "_", insr)
+         ins=gsub(".", "_", insr, fixed=TRUE)
          names(insr)=ins
          dc2r=c(dc2r, insr[ins!=insr])
          # add ins to probenv
@@ -333,7 +339,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             if (!is.symbol(eq[[2L]]) && as.character(eq[[2L]][[1L]]) == "[") {
                tmp=format1(eq[[2L]][[2L]])
                tmpr=format1(eq[[2L]])
-               tmpc=gsub("\\.", "_", tmpr)
+               tmpc=gsub(".", "_", tmpr, fixed=TRUE)
                names(tmpr)=tmpc
                dc2r=c(dc2r, tmpr[tmpc!=tmpr])
                attr(tmp, "lhs")=tmpc
@@ -349,12 +355,9 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
                eq <- eq[[3L]]
          }
          outr=out
-         out=gsub("\\.", "_", outr)
+         out=gsub(".", "_", outr, fixed=TRUE)
          names(outr)=out
          dc2r=c(dc2r, outr[out!=outr])
-         if (! all(out %in% known)) {
-            outv=unique(c(outv, out))
-         }
          # rhs for probe execution
          if (s1 =="for") {
             rhs=sprintf("head(%s, 1L)", rhs)
@@ -364,12 +367,29 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             if (out[i] %in% known)
                next
             eval(parse(t=sprintf("%s=%s", c2r(lhs[i], dc2r), if (eq1 == "for") sprintf("(%s)[[1]]", rhs) else rhs)), env=probenv)
-            var_typeof=rbind(var_typeof, get_vartype(probenv[[c2r(out[i], dc2r)]]))
-            rownames(var_typeof)[nrow(var_typeof)]=out[i]
-            var_dims[[out[i]]]=symdim(parse(t=c2r(out[i], dc2r)), probenv, var_dims)
-            var_decl=rbind(var_decl, get_decl(var_typeof[out[i],], var_dims[[out[i]]]))
-            rownames(var_decl)[nrow(var_decl)]=out[i]
-            known=c(known, out[i])
+            obj=probenv[[c2r(out[i], dc2r)]]
+            is_fun=FALSE
+            if (is.function(obj)) {
+#browser()
+               is_fun=TRUE
+               obj=do.call(obj, lapply(names(head(as.list(args(obj)), -1)), get, envir=probenv))
+            }
+            if (is_fun) {
+               ret_rex=do.call("rex2arma", c(list(eq[[3]]), exec=-1, fname=out[i], copy=copy, includes=lfun_decl, rebuild=rebuild, verbose=verbose));
+               # really create function for future prob calls
+               do.call("rex2arma", c(list(eq[[3]]), exec=1, fname=out[i], copy=copy, includes=lfun_decl, rebuild=rebuild, verbose=verbose))
+               lfun_decl=c(lfun_decl, sprintf("%s %s(%s);\n%s",
+                  ret_rex["ftype"], ret_rex["fname"], ret_rex["fsig"],
+                  ret_rex["fcode"]))
+            } else {
+               var_typeof=rbind(var_typeof, get_vartype(obj))
+               rownames(var_typeof)[nrow(var_typeof)]=out[i]
+               var_dims[[out[i]]]=symdim(parse(t=c2r(out[i], dc2r)), probenv, var_dims)
+               var_decl=rbind(var_decl, get_decl(var_typeof[out[i],], var_dims[[out[i]]]))
+               rownames(var_decl)[nrow(var_decl)]=out[i]
+               known=c(known, out[i])
+               outv=c(outv, out[i])
+            }
          }
       }
 #browser()
@@ -409,10 +429,10 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    }
    if (!is.null(inpvars)) {
       # all inps must be in inpvars
-      di=setdiff(inps, inpvars)
+      di=setdiff(setdiff(inps, inpvars), loc_inps)
       if (length(di)) {
          stop(sprintf("The variables '%s' has to be in the inpvars",
-            paste(di, collapse=", ")))
+            paste(sapply(di, c2r, dc2r), collapse=", ")))
       }
       di=setdiff(inpvars, inps)
       if (length(di)) {
@@ -442,7 +462,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       ivm=grep("(vec|mat)$", inptype[,"arma"])
       inp_in=inpvars
       inp_in[ivm]=sprintf("%s_in_", inpvars[ivm])
-      sig=paste(inptype[,"rcpp"], inp_in, sep=" ", collapse=",\n")
+      sig=paste(inptype[,"rcpp"], inp_in, sep=" ", collapse=",\n ")
    } else {
       decl=sig=""
    }
@@ -459,9 +479,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    if (length(fun_decl)) {
       fun_decl=sort(unique(fun_decl))
    }
-   body=sprintf('
-   // R call:
-   // %s
+   fun_body=sprintf('
    // External R function declarations
 %s
    // Input variable declarations and conversion
@@ -470,10 +488,11 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
 %s
    // Translated code starts here
 %s
-%s', format1(mcall), paste(fun_decl, collapse=""), paste(decl, collapse=""), out_decl, code, ret)
-   
+%s', paste0(fun_decl, collapse=""), paste0(decl, collapse=""), out_decl, code, ret)
+   fun_code=sprintf("%s %s(\n %s) {\n%s\n}", ftype, fname, sig, fun_body)
    code=sprintf("
 Rcpp::cppFunction(depends='RcppArmadillo', rebuild=%s, includes='
+// [[Rcpp::plugins(cpp11)]]
 using namespace arma;
 
 template <typename T>
@@ -505,24 +524,32 @@ Environment base_env_r_=Environment::base_env();
 Function rep_r_=base_env_r_[\"rep\"];
 Function c_r_=base_env_r_[\"c\"];
 
-', \n\"
-
-%s %s(\n%s) {\n%s\n}\",\nverbose=%s, plugin=\"cpp14\")\n",
-      rebuild, ftype, fname, sig, gsub('"', '\\\\"', body), format1(verbose))
-   if (isTRUE(exec) || exec==2L) {
+// Supplied includes 
+%s
+// Local function declarations
+%s
+', \"%s\"\n,\nverbose=%s, plugin=\"cpp11\")\n",
+      rebuild, paste0(includes, collapse="\n"), paste0(lfun_decl, collapse="\n"), gsub('"', '\\\\"', fun_code), format1(verbose))
+#browser()
+   if (exec == 2L) {
       # create function in the parent frame
       # call it with params from the parent frame
       try(eval(parse(text=code), env=pfenv), silent=TRUE)
-if (inherits(.Last.value, "try-error"))
-   browser()
+#if (inherits(.Last.value, "try-error"))
+#   browser()
       try(res<-do.call(fname, lapply(c2r(inpvars, dc2r), get, envir=pfenv), envir=pfenv), silent=TRUE)
-if (inherits(.Last.value, "try-error"))
-   browser()
+#if (inherits(.Last.value, "try-error"))
+#   browser()
       return(res)
    } else if (exec == 1L) {
       eval(parse(text=code), env=pfenv)
       return(code)
-   } else {
+   } else if (exec == 0){
       return(code)
+   } else if (exec == -1){
+#browser()
+      return(c(ftype=as.vector(ftype), fname=fname, fsig=sig, fcode=fun_code))
+   } else {
+      stop(sprintf("Unknown value for exec '%s'", format1(exec)))
    }
 }

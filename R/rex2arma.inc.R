@@ -39,7 +39,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
          obj=eval(st, env=env)
          len=length(obj)
          if (len == 1) {
-             # to be cast a scalar, it is a vector who must be of length 1, not a matrix
+             # to be cast a scalar, it must be a vector of length 1, not a matrix
              return("1")
          }
          if (is.matrix(obj) || is(obj, "Matrix")) {
@@ -52,7 +52,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
          return(NA)
       }
    }
-   if (is.numeric(st) || is.logical(st) || is.character(st)) {
+   if (is.numeric(st) || is.logical(st) || is.character(st) || is.complex(st)) {
       # a plain number
       return("1")
    }
@@ -63,6 +63,10 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
    if (s1 %in% c("=", "<-")) {
       # return the dims of the RHS
       return(symdim(st[[3L]], env, dim_tab))
+   }
+   if (s1 == "ifelse") {
+      # return the dims of the condition
+      return(symdim(st[[2L]], env, dim_tab))
    }
    # dims of arguments
    dims=lapply(st[-1], symdim, env, dim_tab)
@@ -89,6 +93,16 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
    if (any(s1 == c("+", "-")) && lenst == 2L) {
       # unary signs
       return(dims[[1L]])
+   }
+   if (s1 == "if") {
+      # return the longest dim of two parts
+      if (lenst < 4)
+         return(dims[[2]])
+      d1=dims[[2L]]
+      l1=length(d1)
+      d2=dims[[3L]]
+      l2=length(d2)
+      return(if (l2 > l1) d2 else d1)
    }
    if (any(s1 == c("t", "ginv"))) {
       d1=dims[[1L]]
@@ -153,7 +167,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       }
       return(dims[[1L]])
    }
-   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "min", "max", "sd", "norm")) {
+   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "min", "max", "sd", "norm", "identical")) {
       # reducing to scalar functions
       return("1")
    }
@@ -267,7 +281,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       # getting subvector
       return(dims[[2L]])
    }
-   if (any(s1 == c("(", "sqrt", "sin", "cos", "tan", "sinpi", "cospi", "tanpi", "atan", "exp", "sinh", "cosh", "tanh", "asin", "acos", "atan"))) {
+   if (any(s1 == c("(", "abs", "sqrt", "sin", "cos", "tan", "sinpi", "cospi", "tanpi", "atan", "exp", "sinh", "cosh", "tanh", "asin", "acos", "atan"))) {
       # pass through the dims of the first argument
       return(dims[[1L]])
    }
@@ -287,7 +301,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       }
       return(res)
    }
-   if ((s1[1] == c("d", "p", "q", "r")) && any(s1[-1] == c("norm", "gamma", "beta", "cauchy", "chisq", "exp", "geom", "f", "hyper", "lnorm", "multinom", "nbinom", "pois", "t", "unif", "weibull", "signrank", "tukey", "wilcox"))) {
+   if (nchar(s1) > 1 && any(substring(s1, 1, 1) == c("d", "p", "q", "r")) && any(substring(s1, 2) == c("norm", "gamma", "beta", "cauchy", "chisq", "exp", "geom", "f", "hyper", "lnorm", "multinom", "nbinom", "pois", "t", "unif", "weibull", "signrank", "tukey", "wilcox"))) {
       if (lens[1L] == 1L && dims[1] == "1") {
          return("1")
       } else {
@@ -298,19 +312,16 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
    # by default
    # eval and return the dim of result
    res=symdim(eval(st, envir=env), env, dim_tab)
-   warning(sprintf("Couldn't retrive dimension for '%s' so just eval-ed", format1(st)))
+   warning(sprintf("Couldn't figure out dimensions of '%s' so just eval-ed", format1(st)))
    return(res)
 }
 
-call2a=c("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
-   "ceiling"="ceil", "which.min"="which_min", "which.max"="which_max",
-   "Re"="real", "Im"="imag")
 # translate R scalar types to C scalar types
 rsca2csca=c(integer="int", double="double", logical="bool")
 #' Translate an elementary R statement to RcppArmadillo
 #'
 #' @param st A statement to transalte
-#' @param call2arma A named character vector giving Armadillo equivalence
+#' @param call2a A named character vector giving Armadillo equivalence
 #'  for some R functions. It is indexed by R function names.
 #' @param indent A character string used as indentation. It is incremented
 #'  by "   " (3 spaces) inside a \code{{...}} block.
@@ -324,6 +335,9 @@ rsca2csca=c(integer="int", double="double", logical="bool")
 #' @details
 #' Parameter \code{env} is also passed to \code{symdim()} with \code{...}.
 
+call2a=c("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
+   "ceiling"="ceil", "which.min"="which_min", "which.max"="which_max",
+   "Re"="real", "Im"="imag")
 st2arma=function(
 st,
 call2arma=call2a,
@@ -378,6 +392,8 @@ env=parent.frame(),
 #browser()
    if (s1 == "{") {
       argv=sapply(st[-1L], st2arma, call2arma, indent, iftern, env, ...)
+      argv=sub("^([^ ]+)", sprintf("%s\\1", indent), argv) # indent the code which is not yet
+      argv=sub("^$", indent, argv)
    } else if (s1 == "=" || s1 == "<-") {
       argv=c(st2arma(st[[2L]], call2arma, indent, iftern, env, ...),
          st2arma(st[[3L]], call2arma, indent, iftern=TRUE, env, ...))
@@ -392,9 +408,16 @@ env=parent.frame(),
       # populate env with results of this operator
       eval(st, env=env)
       rhs=eval(st[[3]], envir=env)
+      if (is.function(rhs) && is.call(st[[3]]) && deparse(st[[3]][[1]]) == "function") {
+#browser()
+         # jusr skip it. Local functions must be declared and defined out of the function body
+         return("")
+      }
       svm_r=svm(rhs)
       if (is.call(st[[3]]) && st[[3]][[1]] != as.symbol("<-") && st[[3]][[1]] != as.symbol("=") && svm_r == "s") {
-         return(sprintf("%s%s=(%s)", indent, argv[1L], argv[2L]))
+         lhs=try(eval(st[[2]], envir=env))
+         use_fill = !(inherits(lhs, "try-error") || length(lhs) == 1)
+         return(sprintf("%s%s%s(%s)", indent, argv[1L], if (use_fill) ".fill" else "=", argv[2L]))
       } else {
          return(sprintf("%s%s=%s", indent, argv[1L], argv[2L]))
       }
@@ -449,7 +472,9 @@ env=parent.frame(),
             )
          }
          #return(sprintf("vectorise(%s(%s))", s1, paste(argv, collapse=", ")))
-         return(sprintf("%s(%s)", s1, paste(argv, collapse=", ")))
+         if (is.call(st[[3]]) && deparse(st[[3]][[1]]) %in% c(">", "<", ">=", "<=", "==", "!=", "!"))
+            argv=sprintf("find(%s)", paste(argv, collapse=", "))
+         return(sprintf("%s.elem(%s)", s1, paste(argv, collapse=", ")))
       }
    }
    if (s1 == "head") {
@@ -515,7 +540,7 @@ env=parent.frame(),
 #browser()
       if (s1 == "if" && iftern) {
          # ternary operator a?b:c
-         return(sprintf("(%s ? %s : %s)", argv[1L], argv[2L], argv[3L]))
+         return(sprintf("(%s ? (%s) : (%s))", argv[1L], argv[2L], if (length(argv) < 3) "R_NilValue" else argv[3L]))
       } else {
          f1=substring(argv[2L], 1, 1)
          if (f1 == "{")
@@ -538,9 +563,13 @@ env=parent.frame(),
       }
       return(res)
    }
+   if (s1 == "ifelse") {
+      return(sprintf("%s ? %s : %s", argv[1L], argv[2L], if (length(argv) < 3) "R_NilValue" else argv[3L]))
+   }
    if (s1 == "{") {
+#browser()
       return(sprintf("{\n%s;\n%s}", 
-         paste(argv, collapse=";\n"), sub("   ", "", indent)))
+         paste(argv, collapse=";\n"), sub("   ", "", indent, fixed=TRUE)))
    }
    if (s1 == "$") {
       # list element by name
@@ -564,6 +593,11 @@ env=parent.frame(),
       if (s1 == "*" && dims[[1L]][1L] != "1" && dims[[2L]][1L] != "1") {
          s1="%"
       }
+      if (s1 == "/") {
+         # care off integer division
+         pref=if (dims[[1L]][1L] == "1") "(double) " else "conv_to<mat>::from"
+         argv[1]=sprintf("(%s(%s))", pref, argv[1])
+      }
       #if (s1 == "&")
       #   s1="&&"
       #if (s1 == "|")
@@ -581,6 +615,10 @@ env=parent.frame(),
             argv[imin], argv[imax], argv[imax])
       }
       return(sprintf("%s %s %s", argv[1L], s1, argv[2L]))
+   }
+   if (s1 == "identical") {
+      # cannot figure out smth better than plain '=='
+      return(sprintf("(%s) == (%s)", argv[1L], argv[2L]))
    }
    if (any(s1==c("%*%", crossprod, tcrossprod))) {
       # dot products
@@ -648,8 +686,8 @@ env=parent.frame(),
    }
    
    # unary operations
-   if (s1 == "+" || s1 == "-" && lenst == 2L) {
-      return(sprintf("%s%s", s1, argv[1L]))
+   if (s1 == "+" || s1 == "-" || s1 == "!" && lenst == 2L) {
+      return(sprintf("%s(%s)", s1, argv[1L]))
    }
    
    # data creation
@@ -876,6 +914,9 @@ env=parent.frame(),
          }
       }
    }
+   if (s1 == "solve") {
+      return(sprintf("solve(%s, solve_opts::fast)", paste0(argv, collapse=", ")))
+   }
    if (s1 == "print") {
       if (lens[1L] == 1 && dims[[1]] == "1") {
          return(sprintf('%sRcout << "%s=" << %s << endl;\n', indent, argv[1L], argv[1L]))
@@ -883,7 +924,8 @@ env=parent.frame(),
       return(sprintf('%s%s.print(Rcout, "%s=");\n', indent, argv[1L], argv[1L]))
    }
    # probability functions
-   if (any(substr(s1, 1, 1) == c("d", "p", "q", "r")) && any(substring(s1, 2) == c("gamma", "exp", "norm", "beta", "cauchy", "chisq", "geom", "f", "hyper", "lnorm", "multinom", "nbinom", "pois", "t", "unif", "weibull", "signrank", "tukey", "wilcox"))) {
+   if (nchar(s1) > 1 && any(substr(s1, 1, 1) == c("d", "p", "q", "r")) && any(substring(s1, 2) == c("gamma", "exp", "norm", "beta", "cauchy", "chisq", "geom", "f", "hyper", "lnorm", "multinom", "nbinom", "pois", "t", "unif", "weibull", "signrank", "tukey", "wilcox"))) {
+#browser()
       # matched call
       mc=as.list(match.call(get(s1, mode="function"), st))[-1]
       mc[]=argv
@@ -894,13 +936,22 @@ env=parent.frame(),
          mc[["rate"]]=mc[["scale"]]
          mc[["scale"]]=NULL
       }
+      vnm=c("p", "q", "x")
+      for (xnm in vnm) {
+         if (is.null(mc[[xnm]]))
+            next
+         mc[[xnm]]=sprintf("as<NumericVector>(wrap(%s))", mc[[xnm]])
+         break
+      }
       # formal argv
       fa=modifyList(lapply(formals(s1), format1), mc)
       fa[fa == "FALSE"]="false"
       fa[fa == "TRUE"]="true"
       fa["scale"]=NULL
-      r_pref=if (substr(s1, 1, 1) == "r") "" else "R::" # generator is not from R::
-      res=sprintf("%s%s(%s)", r_pref, s1, paste(fa, sep="", collapse=", "))
+      #r_pref=if (substr(s1, 1, 1) == "r") "" else "Rcpp::" # generator is not from R::
+      r_pref=""
+      postf=if (dims[[1]][[1]] == "1") "[0]" else ""
+      res=sprintf("%s%s(%s)%s", r_pref, s1, paste(fa, sep="", collapse=", "), postf)
       return(res)
    }
 #browser()
@@ -1008,7 +1059,7 @@ get_decl=function(t, d) {
          # scalar
          return(c(
             rcpp=switch(t["r"],
-               "character"="std:string",
+               "character"="std::string",
                "complex"="complex",
                "numeric"="double",
                "double"="double",
@@ -1017,7 +1068,7 @@ get_decl=function(t, d) {
                "environment"="Environment"
             ),
             arma=switch(t["r"],
-               "character"="std:string",
+               "character"="std::string",
                "complex"="complex",
                "numeric"="double",
                "double"="double",
@@ -1049,12 +1100,12 @@ get_decl=function(t, d) {
 get_assign=function(st) {
    # go through the tree of statments to gather and return assignements and
    # for loop begining
-   if (!is.language(st) || is.symbol(st)) {
+   if (!is.call(st)) {
       return(list())
    }
    s=as.character(st[[1L]])
    if (s == "=" || s == "<-") {
-      return(list(st))
+      return(c(get_assign(st[[3]]), list(st)))
    }
    if (s == "for") {
       res=append(list(st[1:3]), get_assign(st[[4L]]))
