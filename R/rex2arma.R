@@ -140,7 +140,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    if (is.function(e)) {
       inpvars=sapply(names(formals(e)), gsub, pattern=".", replacement="_", fixed=TRUE)
 #print(call2a)
-      call2a[fname] <<- fname
+      call2a[[fname]] <- fname
 #print(call2a)
 #stop()
       retobj=do.call(e, lapply(names(head(as.list(args(e)), -1)), function(a) get(a, envir=pfenv)))
@@ -297,7 +297,8 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          eq1=as.character(eq[[1L]])
          rhs_is_fun=length(eq) > 2 && is.call(eq[[3]]) && as.character(eq[[3]][[1]]) == "function"
          loc_inps=c(loc_inps, if (rhs_is_fun) names(eq[[3]][[2]]) else c())
-         rhs=format1(if (eq1 == "if") rhs_eq(eq[[2L]]) else rhs_eq(eq[[3L]]))
+         rhsc=if (eq1 == "if") rhs_eq(eq[[2L]]) else rhs_eq(eq[[3L]])
+         rhs=format1(rhsc)
          pada=getParseData(parse(t=rhs))
          # exclude from ins list member with "$"
          isy=which(pada$token == "SYMBOL")
@@ -359,15 +360,19 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          names(outr)=out
          dc2r=c(dc2r, outr[out!=outr])
          # rhs for probe execution
-         if (s1 =="for") {
+         if (eq1 =="for") {
             rhs=sprintf("head(%s, 1L)", rhs)
          }
 #browser()
          for (i in seq_along(out)) {
             if (out[i] %in% known)
                next
-            eval(parse(t=sprintf("%s=%s", c2r(lhs[i], dc2r), if (eq1 == "for") sprintf("(%s)[[1]]", rhs) else rhs)), env=probenv)
-            obj=probenv[[c2r(out[i], dc2r)]]
+            lhsi=c2r(lhs[i], dc2r)
+            probenv[[lhsi]]=eval(rhsc, envir=probenv)
+            if (eq1 == "for")
+               probenv[[lhsi]]=head(probenv[[lhsi]], 1)
+            #eval(parse(t=sprintf("%s=%s", lhsi, if (eq1 == "for") sprintf("(%s)[[1]]", rhs) else rhs)), env=probenv)
+            obj=probenv[[lhsi]]
             is_fun=FALSE
             if (is.function(obj)) {
 #browser()
@@ -436,7 +441,8 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       }
       di=setdiff(inpvars, inps)
       if (length(di)) {
-         stop(sprintf("The variables '%s' in the inpvars are superfluous", paste(di, sep=", ", collapse="")))
+         warning(sprintf("The variables '%s' in the inpvars are superfluous", paste(di, sep=", ", collapse="")))
+         inpvars=setdiff(inpvars, di)
       }
    } else {
       inpvars=inps
@@ -489,47 +495,35 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    // Translated code starts here
 %s
 %s', paste0(fun_decl, collapse=""), paste0(decl, collapse=""), out_decl, code, ret)
-   fun_code=sprintf("%s %s(\n %s) {\n%s\n}", ftype, fname, sig, fun_body)
-   code=sprintf("
-Rcpp::cppFunction(depends='RcppArmadillo', rebuild=%s, includes='
-// [[Rcpp::plugins(cpp11)]]
+   fun_code=sprintf("// [[Rcpp::export]]\n%s %s(\n %s) {\n%s\n}", ftype, fname, sig, fun_body)
+   code_preamble=sprintf('
+// [[Rcpp::plugins("cpp11")]]
+// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::depends(rex2arma)]]
+
+#define RCPP_ARMADILLO_RETURN_COLVEC_AS_VECTOR 
+#include <RcppArmadillo.h>
+// make vec look like vector not one column matrix
+#include <RcppCommon.h>
+#define RETURN_COLVEC_AS_VECTOR
+#include <rex2arma_vec.h>
+
+#include <Rcpp.h>
+using namespace Rcpp;
 using namespace arma;
 
-template <typename T>
-inline unsigned which_max(T v) {
-   unsigned i;
-   v.max(i);
-   return i+1;
-}
+// includes auxiliary definitions
+#include <rex2arma.h>
 
-template<typename T>
-inline unsigned which_min(T v) {
-   unsigned i;
-   v.min(i);
-   return i+1;
-}
-
-template<typename T, typename T2>
-inline T at_rc(T m, T2 idx) {
-   // index of matrix m elements by a two column matrix idx (0-based)
-   ivec i=idx.col(0);
-   i+=idx.col(1)*m.n_rows;
-   uvec ui=conv_to<uvec>::from(i);
-   return m.elem(ui);
-}
-// for random generator
-RNGScope scope;
-// auxiliary functions
-Environment base_env_r_=Environment::base_env();
-Function rep_r_=base_env_r_[\"rep\"];
-Function c_r_=base_env_r_[\"c\"];
-
-// Supplied includes 
+// Supplied includes
 %s
 // Local function declarations
 %s
-', \"%s\"\n,\nverbose=%s, plugin=\"cpp11\")\n",
-      rebuild, paste0(includes, collapse="\n"), paste0(lfun_decl, collapse="\n"), gsub('"', '\\\\"', fun_code), format1(verbose))
+', paste0(includes, collapse="\n"), paste0(lfun_decl, collapse="\n"))
+   code=sprintf("
+Rcpp::sourceCpp(rebuild=%s, \nverbose=%s,\ncode=\"%s\n\")\n",
+      rebuild, format1(verbose), code=gsub('"', '\\\\"', sprintf("%s\n%s", code_preamble, fun_code))
+   )
 #browser()
    if (exec == 2L) {
       # create function in the parent frame
@@ -544,9 +538,9 @@ Function c_r_=base_env_r_[\"c\"];
    } else if (exec == 1L) {
       eval(parse(text=code), env=pfenv)
       return(code)
-   } else if (exec == 0){
+   } else if (exec == 0) {
       return(code)
-   } else if (exec == -1){
+   } else if (exec == -1) {
 #browser()
       return(c(ftype=as.vector(ftype), fname=fname, fsig=sig, fcode=fun_code))
    } else {

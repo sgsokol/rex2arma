@@ -64,13 +64,18 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       # return the dims of the RHS
       return(symdim(st[[3L]], env, dim_tab))
    }
-   if (s1 == "ifelse") {
+   if (s1 == "ifelse" || (s1 == "seq_along" && lenst == 2)) {
       # return the dims of the condition
       return(symdim(st[[2L]], env, dim_tab))
    }
    # dims of arguments
    dims=lapply(st[-1], symdim, env, dim_tab)
    lens=sapply(dims, length)
+   if (any(s1 == c("(", "abs", "sqrt", "sin", "cos", "tan", "sinpi", "cospi", "tanpi", "atan", "exp", "sinh", "cosh", "tanh", "asin", "acos", "atan", "is.finite", "is.infinite", "is.na", "is.nan", "is.symbol", "ceiling", "floor"))) {
+      # pass through the dims of the first argument
+      # this must be before startsWith(s1, "is.") which returns 1.
+      return(dims[[1L]])
+   }
    if (any(s1 == c("+", "-", "*", "/", "^", ">", "<", "<=", ">=", "!=", "==", "&", "|")) && lenst == 3L) {
 #browser()
       # return the longest dim of two arguments
@@ -167,7 +172,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       }
       return(dims[[1L]])
    }
-   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "min", "max", "sd", "norm", "identical")) {
+   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "min", "max", "sd", "norm", "identical") || startsWith(s1, "is.")) {
       # reducing to scalar functions
       return("1")
    }
@@ -202,10 +207,14 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
    }
    
    # data/code control
-   if (s1 %in% c(":", "seq")) {
+   if (s1 == "seq" || s1 == "seq.int") {
+      if (lenst == 1)
+         return(format1(st[[2]]))
+   }
+   if (s1 == ":") {
 #browser()
       # range size
-      if (s1 == ":" && st[[2L]] == st[[3L]]) {
+      if (s1 == ":" && identical(st[[2L]], st[[3L]])) {
          # identical begin and end => a scalar
          return("1")
       }
@@ -281,10 +290,6 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       # getting subvector
       return(dims[[2L]])
    }
-   if (any(s1 == c("(", "abs", "sqrt", "sin", "cos", "tan", "sinpi", "cospi", "tanpi", "atan", "exp", "sinh", "cosh", "tanh", "asin", "acos", "atan"))) {
-      # pass through the dims of the first argument
-      return(dims[[1L]])
-   }
    if (s1 == "head") {
       if (lenst == 2L) {
          # only one argument
@@ -335,16 +340,17 @@ rsca2csca=c(integer="int", double="double", logical="bool")
 #' @details
 #' Parameter \code{env} is also passed to \code{symdim()} with \code{...}.
 
-call2a=c("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
+call2a=as.environment(list("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
    "ceiling"="ceil", "which.min"="which_min", "which.max"="which_max",
-   "Re"="real", "Im"="imag")
+   "Re"="real", "Im"="imag"))
 st2arma=function(
-st,
-call2arma=call2a,
-indent="",
-iftern=FALSE,
-env=parent.frame(),
-...) {
+   st,
+   call2arma=call2a,
+   indent="",
+   iftern=FALSE,
+   env=parent.frame(),
+   ...
+) {
    if (is.null(st)) {
       return("R_NilValue")
    }
@@ -389,7 +395,13 @@ env=parent.frame(),
          }
       }
    }
+   # jump control
+   if (s1 == "break")
+      return(s1)
+   if (s1 == "next")
+      return("continue")
 #browser()
+   lenst=length(st)
    if (s1 == "{") {
       argv=sapply(st[-1L], st2arma, call2arma, indent, iftern, env, ...)
       argv=sub("^([^ ]+)", sprintf("%s\\1", indent), argv) # indent the code which is not yet
@@ -409,14 +421,15 @@ env=parent.frame(),
       eval(st, env=env)
       rhs=eval(st[[3]], envir=env)
       if (is.function(rhs) && is.call(st[[3]]) && deparse(st[[3]][[1]]) == "function") {
-#browser()
          # jusr skip it. Local functions must be declared and defined out of the function body
          return("")
       }
       svm_r=svm(rhs)
       if (is.call(st[[3]]) && st[[3]][[1]] != as.symbol("<-") && st[[3]][[1]] != as.symbol("=") && svm_r == "s") {
+         # rhs is a scalar
          lhs=try(eval(st[[2]], envir=env))
          use_fill = !(inherits(lhs, "try-error") || length(lhs) == 1)
+#if (use_fill) browser()
          return(sprintf("%s%s%s(%s)", indent, argv[1L], if (use_fill) ".fill" else "=", argv[2L]))
       } else {
          return(sprintf("%s%s=%s", indent, argv[1L], argv[2L]))
@@ -435,32 +448,24 @@ env=parent.frame(),
    if (s1 == "[") {
 #browser()
       # indexing operations, decrement by 1
-      inu=which(sapply(st[-(1:2)], is.numeric)) # first argument is alway false, it is a symbol
-      isy=which(sapply(st[-(1:2)], is.symbol)) # first argument is alway true, it is a symbol
+      inu=sapply(st[-(1:2)], is.numeric)
+      isy=sapply(st[-(1:2)], is.symbol)
       dims=lapply(st[-(1:2)], symdim, env, ...)
       isca=sapply(dims, function(d) length(d)==1L && d=="1")
       s1=argv[1L]
       argv=argv[-1L]
-      if (all(isca)) {
-         # individual element access
-         argv=sprintf("(%s)-1", argv)
-         argv[inu]=sapply(st[inu+2], function(s) s-1L)
-         return(sprintf("%s.at(%s)", s1, paste(argv, collapse=", ")))
-      } else if (length(dims[[1L]]) > 1) {
+      if (length(dims[[1L]]) > 1) {
          if (length(dims[[1L]]) == 2 && length(argv)==1) {
             # elements are indexed by a two column matrix (rows,cols)
-            return(sprintf("at_rc(%s, %s)", format(s1), argv[1]))
+            return(sprintf("at_rc(%s, (%s)-1)", format(s1), argv[1]))
          } else {
             stop(sprintf("Index by matrix in an array '%s' is not yet implemented.", format1(st)))
          }
       } else {
          # [row,col] access
-         if (any(isca)) {
-            argv[isca]=sprintf("(%s)-1", argv[isca])
-         }
-         if (length(inu)) {
-            argv[inu]=sapply(inu+2, getElement, object=st)-1
-         }
+         argv[!inu]=ifelse(isca[!inu], sprintf("(%s)-1", argv[!inu]), sprintf("conv_to<uvec>::from(%s)-1", argv[!inu]))
+         if (any(inu))
+            argv[inu]=sapply(which(inu)+2, getElement, object=st)-1
          argv[argv==""]="span()"
          irange=which(sapply(st[-(1:2)], function(s) is.call(s) && as.character(s[[1L]]) == ":"))
          for (i in irange) {
@@ -474,13 +479,12 @@ env=parent.frame(),
          #return(sprintf("vectorise(%s(%s))", s1, paste(argv, collapse=", ")))
          if (is.call(st[[3]]) && deparse(st[[3]][[1]]) %in% c(">", "<", ">=", "<=", "==", "!=", "!"))
             argv=sprintf("find(%s)", paste(argv, collapse=", "))
-         return(sprintf("%s.elem(%s)", s1, paste(argv, collapse=", ")))
+         return(sprintf("%s(%s)", s1, paste(argv, collapse=", ")))
       }
    }
    if (s1 == "head") {
       dims=lapply(st[-1L], symdim, env, ...)
       lens=sapply(dims, length)
-      lenst=length(st)
       if (lens[1] == 1L) {
          obj=eval(st[[2L]], env=env)
          t=rtype2rcpparma(typeof(obj))
@@ -502,14 +506,30 @@ env=parent.frame(),
          }
       }
    }
-   if (s1 == ":") {
+   if (s1 == "seq_len") {
+      return(sprintf("linspace<ivec>(1, %s, %s)", argv[1L], argv[1L]))
+   }
+   if (s1 == "seq_along") {
+      return(sprintf("linspace<ivec>(1, (%s).n_elem, (%s).n_elem)", argv[1L], argv[1L]))
+   }
+   if (s1 == ":" || s1 == "seq" || s1 == "seq.int") {
+#browser()
       # sequence operations
-      if (is.numeric(st[[2L]]) && is.numeric(st[[3L]])) {
-         len=as.integer(abs(st[[3L]]-st[[2L]])+1)
+      if (lenst == 2) {
+         return(sprintf("regspace<ivec>(1, %s)", argv[1L]))
+      } else if (lenst == 3) {
+         return(sprintf("regspace<ivec>(%s, %s)", argv[1L], argv[2L]))
       } else {
-         len=sprintf("abs(%s-%s)+1", argv[2L], argv[1L])
+         stdarg=formals(args(s1))
+         marg=as.list(match.call(get(s1), st))[-1]
+         allarg=modifyList(stdarg, marg)
+         if (!is.null(allarg$by))
+            return(sprintf("regspace<vec>(%s, %s, %s)", argv[1L], allarg$by, argv[2L]))
+         else if (!is.null(allarg[["length.out"]]))
+            return(sprintf("linspace<vec>(%s, %s, %s)", argv[1L], argv[2L], allarg[["length.out"]]))
+         else
+            stop(sprintf("Cannot yet manage this call '%s'", format1(st)))
       }
-      return(sprintf("linspace<ivec>(%s, %s, %s)", argv[1L], argv[2L], len))
    }
    if (s1 == "for") {
 #browser()
@@ -527,7 +547,7 @@ env=parent.frame(),
             counter, begend[2L], counter, spacer, argv[3L]))
       } else {
          # use c++11 construct
-         return(sprintf("%sfor (%s : %s)%s%s%s", indent, argv[1L], argv[2L], spacer, argv[3L], scnl))
+         return(sprintf("%sfor (%s : %s)%s%s", indent, argv[1L], argv[2L], spacer, argv[3L]))
       }
    }
    #if (s1 == "while") {
@@ -801,15 +821,19 @@ env=parent.frame(),
    }
    if (s1 == "matrix") {
       # normalize arguments
-      stdarg=formals(argv(matrix))
+      stdarg=formals(args(matrix))
       marg=as.list(match.call(matrix, st))[-1]
       allarg=modifyList(stdarg, marg)
-      svm_data=svm(allarg[["data"]])
+      svm_data=svm(eval(allarg[["data"]], envir=env))
       argv=sapply(allarg, st2arma, call2arma, indent, iftern, env, ...)
       if (all(is.na(allarg[["data"]]))) {
          rtype=""
       } else {
          rtype=rtype2rcpparma(typeof(eval(allarg[["data"]], env=env)))["arma"]
+      }
+      if (is.null(marg[["ncol"]])) {
+         # need to calculate ncol (default value=1 may be not good))
+         argv["ncol"]=sprintf("(%s).n_elem/(%s)", argv[1], argv["nrow"])
       }
       if (allarg[["byrow"]]) {
          # inverse nrow and ncol, then transpose the matrix
@@ -940,7 +964,7 @@ env=parent.frame(),
       for (xnm in vnm) {
          if (is.null(mc[[xnm]]))
             next
-         mc[[xnm]]=sprintf("as<NumericVector>(wrap(%s))", mc[[xnm]])
+         #mc[[xnm]]=sprintf("as<NumericVector>(wrap(%s))", mc[[xnm]])
          break
       }
       # formal argv
@@ -948,16 +972,19 @@ env=parent.frame(),
       fa[fa == "FALSE"]="false"
       fa[fa == "TRUE"]="true"
       fa["scale"]=NULL
+      if (dims[[1]] != 1) {
+         fa[[1]]=sprintf("conv_to<mat>::from(%s)", fa[[1]])
+      }
       #r_pref=if (substr(s1, 1, 1) == "r") "" else "Rcpp::" # generator is not from R::
       r_pref=""
-      postf=if (dims[[1]][[1]] == "1") "[0]" else ""
+      postf="" #if (dims[[1]][[1]] == "1") "[0]" else ""
       res=sprintf("%s%s(%s)%s", r_pref, s1, paste(fa, sep="", collapse=", "), postf)
       return(res)
    }
 #browser()
    if (s1 %in% names(call2arma)) {
       # simply translate function names
-      res=sprintf("%s(%s)", call2arma[s1], paste(nms, argv, sep="", collapse=", "))
+      res=sprintf("%s(%s)", call2arma[[s1]], paste(nms, argv, sep="", collapse=", "))
       return(res)
    }
    # by default return st as a function call
