@@ -36,13 +36,13 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       } else if (s1 == "") {
          return("")
       } else {
-         obj=eval(st, env=env)
+         obj=eval(st, envir=env)
          len=length(obj)
          if (len == 1) {
              # to be cast a scalar, it must be a vector of length 1, not a matrix
              return("1")
          }
-         if (is.matrix(obj) || is(obj, "Matrix")) {
+         if (is.matrix(obj) || methods::is(obj, "Matrix")) {
             return(c(sprintf("nrow(%s)", s1), sprintf("ncol(%s)", s1)))
          }
          if (is.vector(obj)) {
@@ -381,7 +381,7 @@ st2arma=function(
 #browser()
       s1=as.character(st[[1L]])
       # check if it is a function absent in base environment
-      if (!(s1 %in% names(call2arma)) && !is.function(mget(s1, mode="function", env=baseenv(), ifnot=NA)[[1L]])) {
+      if (!(s1 %in% names(call2arma)) && !is.function(mget(s1, mode="function", envir=baseenv(), ifnotfound=NA)[[1L]])) {
 #cat("find ", s1, "\n", sep="")
          pkg=find(s1, mode="function")
          if (length(pkg)) {
@@ -418,7 +418,7 @@ st2arma=function(
    }
    if (s1 == "=" || s1 == "<-") {
       # populate env with results of this operator
-      eval(st, env=env)
+      eval(st, envir=env)
       rhs=eval(st[[3]], envir=env)
       if (is.function(rhs) && is.call(st[[3]]) && deparse(st[[3]][[1]]) == "function") {
          # jusr skip it. Local functions must be declared and defined out of the function body
@@ -486,7 +486,7 @@ st2arma=function(
       dims=lapply(st[-1L], symdim, env, ...)
       lens=sapply(dims, length)
       if (lens[1] == 1L) {
-         obj=eval(st[[2L]], env=env)
+         obj=eval(st[[2L]], envir=env)
          t=rtype2rcpparma(typeof(obj))
          d=svm(obj)
          # vector argument
@@ -522,7 +522,7 @@ st2arma=function(
       } else {
          stdarg=formals(args(s1))
          marg=as.list(match.call(get(s1), st))[-1]
-         allarg=modifyList(stdarg, marg)
+         allarg=utils::modifyList(stdarg, marg)
          if (!is.null(allarg$by))
             return(sprintf("regspace<vec>(%s, %s, %s)", argv[1L], allarg$by, argv[2L]))
          else if (!is.null(allarg[["length.out"]]))
@@ -594,7 +594,7 @@ st2arma=function(
    if (s1 == "$") {
       # list element by name
       res=sprintf('%s["%s"]', argv[1L], argv[2L])
-      obj=eval(st, env=env)
+      obj=eval(st, envir=env)
       t=rtype2rcpparma(typeof(obj))
       d=svm(obj)
       res=sprintf("as<%s>(%s)", get_decl(t, d)["arma"], res)
@@ -718,7 +718,7 @@ st2arma=function(
    }
    if (s1 == "c" && lenst > 2) {
       # concat arguments in a vector
-      obj=eval(st, env=env)
+      obj=eval(st, envir=env)
       return(sprintf("as<%svec>(c_r_(%s))", rtype2rcpparma(typeof(obj))["arma"],
          paste(nms, argv, sep="", collapse=", ")))
    }
@@ -739,7 +739,7 @@ st2arma=function(
       )
    }
    if (s1 == "rbind") {
-      rtype=rtype2rcpparma(typeof(eval(st[[2L]], env=env)))["arma"]
+      rtype=rtype2rcpparma(typeof(eval(st[[2L]], envir=env)))["arma"]
       # prepare the first matrix
       if (length(dims[[1L]]) == 1L && dims[[1L]] == "1") {
          res=sprintf("%smat(1,1).fill(%s)", rtype, argv[1L])
@@ -757,7 +757,7 @@ st2arma=function(
          if (length(dims[[i]]) == 1L) {
             a=sprintf("(%s).st()", a)
          }
-         atype=rtype2rcpparma(typeof(eval(st[[i+1L]], env=env)))["arma"]
+         atype=rtype2rcpparma(typeof(eval(st[[i+1L]], envir=env)))["arma"]
          if (atype != rtype) {
             if (atype == "cx_" || atype == "") {
                # convert res
@@ -776,7 +776,7 @@ st2arma=function(
    }
    if (s1 == "cbind") {
 #browser()
-      rtype=rtype2rcpparma(typeof(eval(st[[2L]], env=env)))["arma"]
+      rtype=rtype2rcpparma(typeof(eval(st[[2L]], envir=env)))["arma"]
       # prepare the first matrix
       if (length(dims[[1L]]) == 1L && dims[[1L]] == "1") {
          res=sprintf("%smat(1,1).fill(%s)", rtype, argv[1L])
@@ -791,7 +791,7 @@ st2arma=function(
       }
       for (i in 2L:length(argv)) {
          a=argv[i]
-         atype=rtype2rcpparma(typeof(eval(st[[i+1L]], env=env)))["arma"]
+         atype=rtype2rcpparma(typeof(eval(st[[i+1L]], envir=env)))["arma"]
          if (atype != rtype) {
             if (atype == "cx_" || atype == "") {
                # convert res
@@ -814,7 +814,7 @@ st2arma=function(
       return(sprintf("List::create(%s)", paste(nms, argconv, sep="", collapse=", ")))
    }
    if (s1 == "rep" || s1 == "rep.int") {
-      obj=eval(st, env=env)
+      obj=eval(st, envir=env)
       t=typeof(obj)
       return(sprintf("as<%svec>(rep_r_(%s))", rtype2rcpparma(t)["arma"],
          paste(nms, argv, sep="", collapse=", ")))
@@ -823,13 +823,13 @@ st2arma=function(
       # normalize arguments
       stdarg=formals(args(matrix))
       marg=as.list(match.call(matrix, st))[-1]
-      allarg=modifyList(stdarg, marg)
+      allarg=utils::modifyList(stdarg, marg)
       svm_data=svm(eval(allarg[["data"]], envir=env))
       argv=sapply(allarg, st2arma, call2arma, indent, iftern, env, ...)
       if (all(is.na(allarg[["data"]]))) {
          rtype=""
       } else {
-         rtype=rtype2rcpparma(typeof(eval(allarg[["data"]], env=env)))["arma"]
+         rtype=rtype2rcpparma(typeof(eval(allarg[["data"]], envir=env)))["arma"]
       }
       if (is.null(marg[["ncol"]])) {
          # need to calculate ncol (default value=1 may be not good))
@@ -968,7 +968,7 @@ st2arma=function(
          break
       }
       # formal argv
-      fa=modifyList(lapply(formals(s1), format1), mc)
+      fa=utils::modifyList(lapply(formals(s1), format1), mc)
       fa[fa == "FALSE"]="false"
       fa[fa == "TRUE"]="true"
       fa["scale"]=NULL
@@ -994,7 +994,7 @@ st2arma=function(
       # add as<>() converter for R call
       # get arma type of result
 #browser()
-      obj=eval(st, env=env)
+      obj=eval(st, envir=env)
       t=rtype2rcpparma(typeof(obj))
       d=svm(obj)
       res=sprintf("as<%s>(%s)", get_decl(t, d)["arma"], res)
@@ -1015,7 +1015,7 @@ svm=function(obj) {
        # to be cast a scalar, it is a vector who must be of length 1, not a matrix
        return("s")
    }
-   if (is.matrix(obj) || is(obj, "Matrix")) {
+   if (is.matrix(obj) || methods::is(obj, "Matrix")) {
       return("m")
    }
    if (is.vector(obj)) {
@@ -1056,7 +1056,7 @@ get_vartype=function(obj) {
    # return a named character vector of r, rcpp and arma types that can be used in variable declarations
    # together with struct (one of scalar, vector, matrix if applicable)
    #if (is.character(var)) var=parse(t=var)
-   #obj=eval(var, env=env)
+   #obj=eval(var, envir=env)
    if (all(is.na(obj))) {
       return(rtype2rcpparma("double"))
    } else {

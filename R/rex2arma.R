@@ -123,19 +123,19 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    if (!is.null(inpvars)) {
       # populate probenv with input variables
       for (it in inpvars) {
-         assign(it, get(it, env=pfenv), env=probenv)
+         assign(it, get(it, envir=pfenv), envir=probenv)
       }
    }
    ftype="SEXP"
    e=if (is.function(text)) text else substitute(text)
    retobj=NULL
    if (is.symbol(e)) {
-       e=eval(e, env=pfenv)
-       retobj=eval(e, env=pfenv)
+       e=eval(e, envir=pfenv)
+       retobj=eval(e, envir=pfenv)
    }
    if (is.character(e)) {
       e=parse(text=text)
-      retobj=eval(e, env=pfenv)
+      retobj=eval(e, envir=pfenv)
    }
    if (is.function(e)) {
       inpvars=sapply(names(formals(e)), gsub, pattern=".", replacement="_", fixed=TRUE)
@@ -143,7 +143,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       call2a[[fname]] <- fname
 #print(call2a)
 #stop()
-      retobj=do.call(e, lapply(names(head(as.list(args(e)), -1)), function(a) get(a, envir=pfenv)))
+      retobj=do.call(e, lapply(names(utils::head(as.list(args(e)), -1)), function(a) get(a, envir=pfenv)))
       e=body(e)
       if (class(e) == "{") {
          e=e[-1L]
@@ -201,7 +201,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       s1="" # first item in st
       st=e[[i]] # current statement
       # declare R function calls of type package::func()
-      pada=getParseData(parse(t=if (is.call(st)) format1(st) else as.character(st)))
+      pada=utils::getParseData(parse(text=if (is.call(st)) format1(st) else as.character(st)))
       # function calls
       ifu=which(pada$token == "SYMBOL_FUNCTION_CALL")
       # namespace "::" operator
@@ -219,7 +219,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       # declare only functions other than from package:base and package:stats
       # for these two we rely on rcpp sugar
       fun=pada$text[ifu[!ins_get]]
-      pkg=sapply(fun, function(f) { p=find(f, mode="function"); if ("package:base" %in% p) "package:base" else p[1]})
+      pkg=sapply(fun, function(f) { p=utils::find(f, mode="function"); if ("package:base" %in% p) "package:base" else p[1]})
       inb=pkg != "package:base" & pkg != "package:stats" & !(fun %in% names(call2a)) & !is.na(pkg)
       fun=fun[inb]
       pkg=pkg[inb]
@@ -244,7 +244,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             if (s1 == "=" || s1 == "<-") {
                ret=sprintf("%s;\n%sreturn %s;\n", ret, indent, st2arma(st[[2]], indent="", iftern=TRUE, env=probenv, dim_tab=var_dims))
             } else if (s1 == "assign") {
-               ret=sprintf("%s;\n%sreturn %s;\n", ret, indent, st2arma(eval(st[[2]], env=probenv), indent="", iftern=TRUE, env=probenv, dim_tab=var_dims))
+               ret=sprintf("%s;\n%sreturn %s;\n", ret, indent, st2arma(eval(st[[2]], envir=probenv), indent="", iftern=TRUE, env=probenv, dim_tab=var_dims))
             } else {
                ret=sprintf("%sreturn %s;\n", indent, ret)
             }
@@ -264,7 +264,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          dc2r=c(dc2r, insr[ins!=insr])
          # add ins to probenv
          for (it in setdiff(insr, ls(probenv))) {
-            assign(it, get(it, env=pfenv), env=probenv)
+            assign(it, get(it, envir=pfenv), envir=probenv)
          }
          # get typeof and declaration ins
          for (it in setdiff(ins, rownames(var_decl))) {
@@ -283,7 +283,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          inps=c(inps, di)
       }
 #browser()
-      #pada=getParseData(parse(t=format1(st)))
+      #pada=utils::getParseData(parse(text=format1(st)))
       #ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN" |
       #   pada$token=="IN")
       
@@ -299,7 +299,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          loc_inps=c(loc_inps, if (rhs_is_fun) names(eq[[3]][[2]]) else c())
          rhsc=if (eq1 == "if") rhs_eq(eq[[2L]]) else rhs_eq(eq[[3L]])
          rhs=format1(rhsc)
-         pada=getParseData(parse(t=rhs))
+         pada=utils::getParseData(parse(text=rhs))
          # exclude from ins list member with "$"
          isy=which(pada$token == "SYMBOL")
          idol=which(pada$token == "'$'")
@@ -313,7 +313,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          dc2r=c(dc2r, insr[ins!=insr])
          # add ins to probenv
          for (it in setdiff(insr, ls(probenv))) {
-            assign(it, get(it, env=pfenv), env=probenv)
+            assign(it, get(it, envir=pfenv), envir=probenv)
          }
          # get typeof and declaration ins
          for (it in setdiff(ins, rownames(var_decl))) {
@@ -371,7 +371,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             probenv[[lhsi]]=eval(rhsc, envir=probenv)
             if (eq1 == "for")
                probenv[[lhsi]]=head(probenv[[lhsi]], 1)
-            #eval(parse(t=sprintf("%s=%s", lhsi, if (eq1 == "for") sprintf("(%s)[[1]]", rhs) else rhs)), env=probenv)
+            #eval(parse(text=sprintf("%s=%s", lhsi, if (eq1 == "for") sprintf("(%s)[[1]]", rhs) else rhs)), envir=probenv)
             obj=probenv[[lhsi]]
             is_fun=FALSE
             if (is.function(obj)) {
@@ -389,7 +389,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             } else {
                var_typeof=rbind(var_typeof, get_vartype(obj))
                rownames(var_typeof)[nrow(var_typeof)]=out[i]
-               var_dims[[out[i]]]=symdim(parse(t=c2r(out[i], dc2r)), probenv, var_dims)
+               var_dims[[out[i]]]=symdim(parse(text=c2r(out[i], dc2r)), probenv, var_dims)
                var_decl=rbind(var_decl, get_decl(var_typeof[out[i],], var_dims[[out[i]]]))
                rownames(var_decl)[nrow(var_decl)]=out[i]
                known=c(known, out[i])
@@ -528,7 +528,7 @@ Rcpp::sourceCpp(rebuild=%s, \nverbose=%s,\ncode=\"%s\n\")\n",
    if (exec == 2L) {
       # create function in the parent frame
       # call it with params from the parent frame
-      try(eval(parse(text=code), env=pfenv), silent=TRUE)
+      try(eval(parse(text=code), envir=pfenv), silent=TRUE)
 #if (inherits(.Last.value, "try-error"))
 #   browser()
       try(res<-do.call(fname, lapply(c2r(inpvars, dc2r), get, envir=pfenv), envir=pfenv), silent=TRUE)
@@ -536,7 +536,7 @@ Rcpp::sourceCpp(rebuild=%s, \nverbose=%s,\ncode=\"%s\n\")\n",
 #   browser()
       return(res)
    } else if (exec == 1L) {
-      eval(parse(text=code), env=pfenv)
+      eval(parse(text=code), envir=pfenv)
       return(code)
    } else if (exec == 0) {
       return(code)

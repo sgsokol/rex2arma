@@ -1,4 +1,6 @@
+#browser()
 rebuild <<- FALSE
+exec <<- 2 # convert to C++, execute it and return its result
 context("simple expressions")
 n <<- 1L
 x <<- 2.5
@@ -23,7 +25,7 @@ for (nm in names(cases)) {
    e=cases[[nm]]
    te=deparse(e)
    test_that(nm, {
-      expect_equal(c(rex2arma(te, r=rebuild)), c(eval(e)), label=te)
+      expect_equal(c(rex2arma(te, r=rebuild, exec=exec, verbose=TRUE)), c(eval(e)), label=te)
    })
 }
 
@@ -56,20 +58,20 @@ for (o in op) {
       #}
       src=paste(a, "1", o, a, "2", sep="")
       # pass text var
-      test_that(src, expect_equal(c(rex2arma(src, r=rebuild)), c(eval(parse(t=src))), label=src))
+      test_that(src, expect_equal(c(rex2arma(src, r=rebuild, exec=exec)), c(eval(parse(text=src))), label=src))
       
       # pass one shot function
       eval(parse(t=sprintf("f=function(%s1, %s2) %s", a, a, src)), envir=.GlobalEnv)
-      test_that(src, expect_equal(c(rex2arma(f, r=rebuild)), c(eval(parse(t=sprintf("f(%s1, %s2)", a, a)))), label="function()"))
+      test_that(src, expect_equal(c(rex2arma(f, r=rebuild, exec=exec)), c(eval(parse(text=sprintf("f(%s1, %s2)", a, a)))), label="function()"))
       # pass body of f in braces {...}
       fsrc=sprintf("f=function(%s1, %s2) {%s}", a, a, src)
       eval(parse(t=fsrc), envir=.GlobalEnv)
-      test_that(src, expect_equal(c({rex2arma(f, fname="f_arma_", r=rebuild); do.call(f_arma_, lapply(paste(a, 1:2, sep=""), as.symbol))}), c(eval(parse(t=sprintf("f(%s1, %s2)", a, a)))), label="function(){}"))
+      test_that(src, expect_equal(c({rex2arma(f, fname="f_arma_", r=rebuild, exec=exec); do.call(f_arma_, lapply(paste(a, 1:2, sep=""), as.symbol))}), c(eval(parse(t=sprintf("f(%s1, %s2)", a, a)))), label="function(){}"))
       # pass plain expression
       e=parse(t=src)
-      test_that(src, expect_equal(c(rex2arma(e, r=rebuild)), c(eval(e)), label="expr"))
+      test_that(src, expect_equal(c(rex2arma(e, r=rebuild, exec=exec)), c(eval(e)), label="expr"))
       # pass braced expression
       e=parse(t=sprintf("{%s}", src))
-      test_that(src, expect_equal(c(rex2arma(e, r=rebuild)), c(eval(e)), label="{expr}"))
+      test_that(src, expect_equal(c(rex2arma(e, r=rebuild, exec=exec)), c(eval(e)), label="{expr}"))
    }
 }
