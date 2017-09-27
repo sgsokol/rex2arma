@@ -21,7 +21,7 @@
 #' If the \code{text} is a string it is parsed. If not, it must
 #' be a valid R expression or a function or a plain code (cf. Examples).
 #'
-#' If \enumerate {
+#' If \enumerate{
 #'  \item \code{exec==0}: (default) the full RcppArmadillo code is not executed
 #'    it is just returned as a string;
 #'  \item \code{exec==-1}: the same as 0 but only translated code is returned,
@@ -58,20 +58,20 @@
 #' @examples
 #' a=1:3; b=a+3; # NB. Inputs a and b are defined before a call to rex2arma()
 #' # \code{text} is a string:
-#' code=rex2arma("a+b", exec=F)
+#' code=rex2arma("a+b", exec=0)
 #' cat(code);
 #'
 #' # \code{text} is a function
 #' f=function(a, b) a+b
-#' code=rex2arma(f, exec=F)
+#' code=rex2arma(f, exec=0)
 #'
 #' # \code{text} is a plain R code
-#' code=rex2arma(a+b, exec=F)
-#' code=rex2arma({inner=a%*%b; outer=a%o%b}, exec=F)
+#' code=rex2arma(a+b, exec=0)
+#' code=rex2arma({inner=a%*%b; outer=a%o%b}, exec=0)
 #'
 #' # \code{text} is an expression
 #' e=parse(text="{s=a+b; d=a-b}")
-#' code=rex2arma(e, exec=F)
+#' code=rex2arma(e, exec=0)
 #'
 #' # to execute the produced code:
 #' (result=eval(parse(text=code)))
@@ -115,6 +115,8 @@
 rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text))) sprintf("%s_arma_", deparse(substitute(text))) else "rex_arma_", exec=0, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL, verbose=FALSE, includes=character()) {
 #browser()
    mcall=match.call()
+   if (verbose)
+      cat("matched call=", format(mcall), "\n", sep="")
    fname=gsub(".", "_", fname, fixed=TRUE)
    verbose=as.logical(verbose)
    pfenv=parent.frame()
@@ -200,8 +202,13 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       ins=c() # c input vars -"-
       s1="" # first item in st
       st=e[[i]] # current statement
+      sts=if (is.call(st)) format1(st) else as.character(st)
+#cat("st=", format(st), "\n", sep="")
+#cat("sts=", sts, "\n", sep="")
       # declare R function calls of type package::func()
-      pada=utils::getParseData(parse(text=if (is.call(st)) format1(st) else as.character(st)))
+#cat("parse=", format(parse(text=sts)), "\n", sep="")
+      pada=utils::getParseData(parse(text=sts, keep.source=TRUE))
+#cat("pada=", format(pada), "\n", sep="")
       # function calls
       ifu=which(pada$token == "SYMBOL_FUNCTION_CALL")
       # namespace "::" operator
@@ -259,8 +266,10 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             isy=isy[-idol]
          }
          insr=sort(unique(pada$text[isy]))
+#cat("insr=", insr, "\n", sep="")
          ins=gsub(".", "_", insr, fixed=TRUE)
-         names(insr)=ins
+         if (!is.null(insr))
+            names(insr)=ins
          dc2r=c(dc2r, insr[ins!=insr])
          # add ins to probenv
          for (it in setdiff(insr, ls(probenv))) {
@@ -299,7 +308,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          loc_inps=c(loc_inps, if (rhs_is_fun) names(eq[[3]][[2]]) else c())
          rhsc=if (eq1 == "if") rhs_eq(eq[[2L]]) else rhs_eq(eq[[3L]])
          rhs=format1(rhsc)
-         pada=utils::getParseData(parse(text=rhs))
+         pada=utils::getParseData(parse(text=rhs, keep.source=TRUE))
          # exclude from ins list member with "$"
          isy=which(pada$token == "SYMBOL")
          idol=which(pada$token == "'$'")
@@ -361,7 +370,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          dc2r=c(dc2r, outr[out!=outr])
          # rhs for probe execution
          if (eq1 =="for") {
-            rhs=sprintf("head(%s, 1L)", rhs)
+            rhs=sprintf("utils::head(%s, 1L)", rhs)
          }
 #browser()
          for (i in seq_along(out)) {
@@ -370,14 +379,14 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             lhsi=c2r(lhs[i], dc2r)
             probenv[[lhsi]]=eval(rhsc, envir=probenv)
             if (eq1 == "for")
-               probenv[[lhsi]]=head(probenv[[lhsi]], 1)
+               probenv[[lhsi]]=utils::head(probenv[[lhsi]], 1)
             #eval(parse(text=sprintf("%s=%s", lhsi, if (eq1 == "for") sprintf("(%s)[[1]]", rhs) else rhs)), envir=probenv)
             obj=probenv[[lhsi]]
             is_fun=FALSE
             if (is.function(obj)) {
 #browser()
                is_fun=TRUE
-               obj=do.call(obj, lapply(names(head(as.list(args(obj)), -1)), get, envir=probenv))
+               obj=do.call(obj, lapply(names(utils::head(as.list(args(obj)), -1)), get, envir=probenv))
             }
             if (is_fun) {
                ret_rex=do.call("rex2arma", c(list(eq[[3]]), exec=-1, fname=out[i], copy=copy, includes=lfun_decl, rebuild=rebuild, verbose=verbose));
@@ -447,6 +456,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    } else {
       inpvars=inps
    }
+#cat("inps=", inpvars, "\n", sep="")
    
    # gather rcpp code
    inptype=var_decl[inpvars,,drop=FALSE]
@@ -501,12 +511,9 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
 // [[Rcpp::depends(RcppArmadillo)]]
 // [[Rcpp::depends(rex2arma)]]
 
+// make vec to look like a vector not like a one column matrix
 #define RCPP_ARMADILLO_RETURN_COLVEC_AS_VECTOR 
 #include <RcppArmadillo.h>
-// make vec look like vector not one column matrix
-#include <RcppCommon.h>
-#define RETURN_COLVEC_AS_VECTOR
-#include <rex2arma_vec.h>
 
 #include <Rcpp.h>
 using namespace Rcpp;
@@ -528,10 +535,12 @@ Rcpp::sourceCpp(rebuild=%s, \nverbose=%s,\ncode=\"%s\n\")\n",
    if (exec == 2L) {
       # create function in the parent frame
       # call it with params from the parent frame
+      if (verbose)
+         cat("rex2arma produced code=", code, "\n", sep="")
       try(eval(parse(text=code), envir=pfenv), silent=TRUE)
 #if (inherits(.Last.value, "try-error"))
 #   browser()
-      try(res<-do.call(fname, lapply(c2r(inpvars, dc2r), get, envir=pfenv), envir=pfenv), silent=TRUE)
+      res <- try(do.call(fname, lapply(c2r(inpvars, dc2r), get, envir=pfenv), envir=pfenv), silent=TRUE)
 #if (inherits(.Last.value, "try-error"))
 #   browser()
       return(res)

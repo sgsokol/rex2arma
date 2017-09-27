@@ -383,7 +383,7 @@ st2arma=function(
       # check if it is a function absent in base environment
       if (!(s1 %in% names(call2arma)) && !is.function(mget(s1, mode="function", envir=baseenv(), ifnotfound=NA)[[1L]])) {
 #cat("find ", s1, "\n", sep="")
-         pkg=find(s1, mode="function")
+         pkg=utils::find(s1, mode="function")
          if (length(pkg)) {
             if (! ("package:base" %in% pkg || "package:stats" %in% pkg)) {
                pkg=pkg[1L]

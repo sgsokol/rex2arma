@@ -7,9 +7,10 @@ Author: Serguei Sokol
 Maintainer: Serguei Sokol  <sokol@insa-toulouse.fr>
 Description: Automatic conversion of basic R code (linear algebra and alike) into
     RcppArmadillo code.
+LinkingTo: Rcpp
 SystemRequirements: C++11
+Imports: methods, utils
 License: GPL-2
 Suggests:
-    Rcpp,
-    RcppArmadillo
+    testthat
 RoxygenNote: 6.0.1
