@@ -158,7 +158,11 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    }
    # determine the return type
    t=rtype2rcpparma(typeof(retobj))
-   if (is.vector(retobj)) {
+#browser()
+   if (is.list(retobj)) {
+      # list()
+      ftype="List"
+   } else if (is.vector(retobj)) {
       # e.g. "double" (for scalar) or "vec")
       ftype=if (length(retobj) == 1) rsca2csca[t["r"]] else sprintf("%svec", t["arma"])
    } else if (is.matrix(retobj) || is.array(retobj)) {
@@ -240,8 +244,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       s1=if (is.call(st)) format1(st[[1]]) else format1(st)
       if (s1 == "<-")
          s1="="
-      if (is.symbol(st) || ! is.language(st) || s1 == "return" ||
-         (i == length(e))) {
+      if (s1 == "return" || i == length(e)) {
 #browser()
          # if it is the last statement
          # prepare return
@@ -265,7 +268,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             idol=apply(outer(isy, idol, `-`), 2L, function(v) which.max(v > 0L))
             isy=isy[-idol]
          }
-         insr=sort(unique(pada$text[isy]))
+         insr=unique(pada$text[isy])
 #cat("insr=", insr, "\n", sep="")
          ins=gsub(".", "_", insr, fixed=TRUE)
          if (!is.null(insr))
@@ -296,7 +299,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       #ieq=which(pada$token=="EQ_ASSIGN" | pada$token=="LEFT_ASSIGN" |
       #   pada$token=="IN")
       
-      # gather out vars in assignements and for loops (because of "if" and "for" blocks, it may be many)
+      # gather out vars in assignements and for loops (because of "if", "for" and "while" blocks, it may be many)
       leq=get_assign(st) # list of all equalities in the st
       for (eq in leq) {
          if (length(eq) == 0L) {
@@ -306,7 +309,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          eq1=as.character(eq[[1L]])
          rhs_is_fun=length(eq) > 2 && is.call(eq[[3]]) && as.character(eq[[3]][[1]]) == "function"
          loc_inps=c(loc_inps, if (rhs_is_fun) names(eq[[3]][[2]]) else c())
-         rhsc=if (eq1 == "if") rhs_eq(eq[[2L]]) else rhs_eq(eq[[3L]])
+         rhsc=if (eq1 == "if" || eq1 == "while") rhs_eq(eq[[2L]]) else rhs_eq(eq[[3L]])
          rhs=format1(rhsc)
          pada=utils::getParseData(parse(text=rhs, keep.source=TRUE))
          # exclude from ins list member with "$"
@@ -316,7 +319,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             idol=apply(outer(isy, idol, `-`), 2L, function(v) which.max(v > 0L))
             isy=isy[-idol]
          }
-         insr=sort(unique(pada$text[isy]))
+         insr=unique(pada$text[isy])
          ins=gsub(".", "_", insr, fixed=TRUE)
          names(insr)=ins
          dc2r=c(dc2r, insr[ins!=insr])
@@ -339,7 +342,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          di=setdiff(setdiff(ins, outv), inps)
          inps=c(inps, di)
          # out update
-         if (eq1 == "if") {
+         if (eq1 == "if" || eq1 == "while") {
             # no out in this operator
             next
          }
@@ -369,7 +372,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          names(outr)=out
          dc2r=c(dc2r, outr[out!=outr])
          # rhs for probe execution
-         if (eq1 =="for") {
+         if (eq1 == "for") {
             rhs=sprintf("utils::head(%s, 1L)", rhs)
          }
 #browser()
@@ -383,8 +386,8 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             #eval(parse(text=sprintf("%s=%s", lhsi, if (eq1 == "for") sprintf("(%s)[[1]]", rhs) else rhs)), envir=probenv)
             obj=probenv[[lhsi]]
             is_fun=FALSE
-            if (is.function(obj)) {
 #browser()
+            if (is.function(obj)) {
                is_fun=TRUE
                obj=do.call(obj, lapply(names(utils::head(as.list(args(obj)), -1)), get, envir=probenv))
             }
@@ -415,7 +418,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    if (ret == "") {
       # prepare return if not yet done
       # find output vars
-      outs=sort(unique(outv)) # output variables
+      outs=unique(outv) # output variables
       if (is.null(outvars)) {
          outvars=outs
       } else {
@@ -441,6 +444,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          paste('      _("', names(outvars), '")=',
          outconv, sep='', collapse=",\n"))
    }
+#browser()
    if (!is.null(inpvars)) {
       # all inps must be in inpvars
       di=setdiff(setdiff(inps, inpvars), loc_inps)
@@ -450,8 +454,8 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       }
       di=setdiff(inpvars, inps)
       if (length(di)) {
-         warning(sprintf("The variables '%s' in the inpvars are superfluous", paste(di, sep=", ", collapse="")))
-         inpvars=setdiff(inpvars, di)
+         warning(sprintf("The variables '%s' in the inpvars are superfluous", paste0(di, collapse=", ")))
+         inpvars=inpvars[!(inpvars %in% di)]
       }
    } else {
       inpvars=inps
@@ -484,16 +488,13 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    }
    out_decl=""
    outv=setdiff(outv, inpvars)
-   if (length(outv)) {
-      outv=sort(outv)
-   }
    for (out in outv) {
       out_decl=sprintf("%s%s%s %s;\n", out_decl, indent,
          var_decl[out, "arma"], out)
    }
    
    if (length(fun_decl)) {
-      fun_decl=sort(unique(fun_decl))
+      fun_decl=unique(fun_decl)
    }
    fun_body=sprintf('
    // External R function declarations
@@ -545,6 +546,8 @@ Rcpp::sourceCpp(rebuild=%s, \nverbose=%s,\ncode=\"%s\n\")\n",
 #   browser()
       return(res)
    } else if (exec == 1L) {
+      if (verbose)
+         cat("rex2arma produced code=", code, "\n", sep="")
       eval(parse(text=code), envir=pfenv)
       return(code)
    } else if (exec == 0) {

@@ -71,7 +71,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
    # dims of arguments
    dims=lapply(st[-1], symdim, env, dim_tab)
    lens=sapply(dims, length)
-   if (any(s1 == c("(", "abs", "sqrt", "sin", "cos", "tan", "sinpi", "cospi", "tanpi", "atan", "exp", "sinh", "cosh", "tanh", "asin", "acos", "atan", "is.finite", "is.infinite", "is.na", "is.nan", "is.symbol", "ceiling", "floor"))) {
+   if (any(s1 == c("(", "abs", "sqrt", "sin", "cos", "tan", "sinpi", "cospi", "tanpi", "atan", "exp", "sinh", "cosh", "tanh", "asin", "acos", "atan", "is.finite", "is.infinite", "is.na", "is.nan", "is.symbol", "ceiling", "floor", "!"))) {
       # pass through the dims of the first argument
       # this must be before startsWith(s1, "is.") which returns 1.
       return(dims[[1L]])
@@ -172,7 +172,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       }
       return(dims[[1L]])
    }
-   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "min", "max", "sd", "norm", "identical") || startsWith(s1, "is.")) {
+   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "min", "max", "sd", "norm", "identical", "&&", "||") || startsWith(s1, "is.")) {
       # reducing to scalar functions
       return("1")
    }
@@ -224,49 +224,24 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
    if (s1 == "rep" || s1 == "rep.int") {
       # repeated vector
       argv=sapply(st[-1L], format1)
-      # match argument names times and each
-      times=which(!is.na(pmatch(names(st[-1L]), "times")))
-      if (length(times) > 1L) {
-         stop(sprintf("Argument 'times' was found more than once in '%s'",
-            format1(st)))
-      }
-      each=which(!is.na(pmatch(names(st[-1L]), "each")))
-      if (length(each) > 1L) {
-         stop(sprintf("Argument 'each' was found more than once in '%s'",
-            format1(st)))
-      }
-      x=which(!is.na(pmatch(names(st[-1L]), "x")))
-      if (length(x) > 1L) {
-         stop(sprintf("Argument 'x' was found more than once in '%s'",
-            format1(st)))
-      }
-      if (length(x) == 0L) {
-         # x will be the first unnamed argument
-         x=which.max(nchar(argv)==0L)
-      }
-      if (length(times) == 0L) {
+      if (lenst == 2)
+         return(argv[1])
+      # match arguments
+      marg=as.list(match.call(args(get(s1)), st))[-1]
+      times=marg$times
+      each=marg$each
+      x=marg$x
+      if (is.null(times)) {
          # times will be the first unnamed argument after x removing
-         times=which(nchar(argv[-x])==0L)
-         if (length(times)) {
-            times=times[1L]
-            times=times+(times>=x)
-         }
+         itimes=which(nchar(names(marg))==0L)[1+!("x" %in% names(marg))]
+         times=marg[[itimes]]
+         if (is.null(times))
+            times=1
       }
-      # 'each' and 'times' may be empty separatly, not both
-      if (length(times) && lens[times] == 1L && dims[[times]] == "1") {
-         # the whole vector is repeated 'times' times
-         res=sprintf("%s*(%s)", paste("(", dims[[x]], ")", sep="", collapse="*"),
-            argv[times])
-      } else if (length(times) && lens[times] == 1L) {
-         # 'times' is a vector
-         res=sprintf("sum(%s)", argv[times])
-      } else if (length(times) == 0L) {
-         res=sprintf("%s", paste("(", dims[[x]], ")", sep="", collapse="*"))
-      }
-      if (length(each)) {
-         # repeat eache element
-         res=sprintf("(%s)*(%s)", res, argv[each])
-      }
+      if (is.null(each))
+         each=1
+      ix=which("x" == names(marg))
+      res=if (dims[[ix]] == "1" && times == 1 && each == 1) "1" else sprintf("(%s)*(%s)*(%s)", dims[[ix]], format1(times), format1(each))
       return(res)
    }
    
@@ -340,9 +315,11 @@ rsca2csca=c(integer="int", double="double", logical="bool")
 #' @details
 #' Parameter \code{env} is also passed to \code{symdim()} with \code{...}.
 
+# function that translates just by name, i.e. the arguments are passed trough as they are
 call2a=as.environment(list("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
-   "ceiling"="ceil", "which.min"="which_min", "which.max"="which_max",
-   "Re"="real", "Im"="imag"))
+   "ceiling"="arma::ceil", "floor"="arma::floor", "round"="arma::round", "trunc"="arma::trunc",
+   "which.min"="which_min", "which.max"="which_max",
+   "Re"="real", "Im"="imag", "integer"="ivec", "double"="vec"))
 st2arma=function(
    st,
    call2arma=call2a,
@@ -410,7 +387,8 @@ st2arma=function(
       argv=c(st2arma(st[[2L]], call2arma, indent, iftern, env, ...),
          st2arma(st[[3L]], call2arma, indent, iftern=TRUE, env, ...))
    } else {
-      argv=sapply(st[-1L], st2arma, call2arma, sprintf("%s   ", indent), iftern, env, ...)
+      # put arguments in the order of the function definition
+      argv=sapply(as.list(match.call(args(s1), st))[-1L], st2arma, call2arma, sprintf("%s   ", indent), iftern, env, ...)
    }
    # trim spaces for arguments of "if" and "="
    if (s1 %in% c("=", "<-", "if", "for", "while")) {
@@ -592,7 +570,7 @@ st2arma=function(
          paste(argv, collapse=";\n"), sub("   ", "", indent, fixed=TRUE)))
    }
    if (s1 == "$") {
-      # list element by name
+      # list element picked by its name
       res=sprintf('%s["%s"]', argv[1L], argv[2L])
       obj=eval(st, envir=env)
       t=rtype2rcpparma(typeof(obj))
@@ -719,8 +697,10 @@ st2arma=function(
    if (s1 == "c" && lenst > 2) {
       # concat arguments in a vector
       obj=eval(st, envir=env)
-      return(sprintf("as<%svec>(c_r_(%s))", rtype2rcpparma(typeof(obj))["arma"],
-         paste(nms, argv, sep="", collapse=", ")))
+      if (is.list(obj))
+         return(sprintf("c_r_(%s)", paste(nms, argv, sep="", collapse=", ")))
+      else
+         return(sprintf("as<%svec>(c_r_(%s))", rtype2rcpparma(typeof(obj))["arma"], paste(nms, argv, sep="", collapse=", ")))
    }
    
    if (s1 %in% c("c", "as.numeric", "as.double", "as.integer") && lenst == 2L) {
@@ -729,14 +709,14 @@ st2arma=function(
       if (lens[1L] > 1L) {
          argv=sprintf("vectorise(%s)", argv[1L])
       } else if (dims[[1L]] == "1") {
-         argv=sprintf("as_scalar(%s)", argv[1L])
+         return(sprintf(if (s1 == "as.integer") "((int) as_scalar(%s))" else "as_scalar(%s)", argv[1L]))
       } else {
          argv=argv[1L]
       }
-      switch(s1,
-         "as.integer"=return(sprintf("conv_to<ivec>::from(%s)", argv)),
+      if (s1 == "as.integer")
+         return(sprintf("conv_to<ivec>::from(%s)", argv))
+      else
          return(sprintf("conv_to<vec>::from(%s)", argv))
-      )
    }
    if (s1 == "rbind") {
       rtype=rtype2rcpparma(typeof(eval(st[[2L]], envir=env)))["arma"]
@@ -814,28 +794,38 @@ st2arma=function(
       return(sprintf("List::create(%s)", paste(nms, argconv, sep="", collapse=", ")))
    }
    if (s1 == "rep" || s1 == "rep.int") {
+      if (lenst == 2)
+         return(sprintf(if (dims[[1]] == "1") "%s" else "vectorise(%s)", argv))
+#browser()
+      marg=as.list(match.call(args(get(s1)), st))[-1]
       obj=eval(st, envir=env)
+      times=argv["times"]
+      if (is.na(times)) {
+         itimes=which(nchar(names(marg)) == 0)[1+!("x" %in% names(marg))]
+         times=if (is.na(itimes)) "1" else argv[itimes]
+      }
+      each=if ("each" %in% names(marg)) argv["each"] else "1"
+      if (lenst <= 4 && length(dims[[1]]) == 1) {
+         return(sprintf("_rex_arma_rep(%s, %s, %s)", argv["x"], times, each))
+      }
       t=typeof(obj)
       return(sprintf("as<%svec>(rep_r_(%s))", rtype2rcpparma(t)["arma"],
          paste(nms, argv, sep="", collapse=", ")))
    }
    if (s1 == "matrix") {
       # normalize arguments
-      stdarg=formals(args(matrix))
       marg=as.list(match.call(matrix, st))[-1]
-      allarg=utils::modifyList(stdarg, marg)
-      svm_data=svm(eval(allarg[["data"]], envir=env))
-      argv=sapply(allarg, st2arma, call2arma, indent, iftern, env, ...)
-      if (all(is.na(allarg[["data"]]))) {
-         rtype=""
-      } else {
-         rtype=rtype2rcpparma(typeof(eval(allarg[["data"]], envir=env)))["arma"]
+      svm_data=svm(eval(marg[["data"]], envir=env))
+      argv=sapply(marg, st2arma, call2arma, indent, iftern, env, ...)
+      if (is.null(marg[["data"]])) {
+         stop(sprintf("no 'data' argument in the call '%s'", format1(st)))
       }
+      rtype=rtype2rcpparma(typeof(eval(marg[["data"]], envir=env)))["arma"]
       if (is.null(marg[["ncol"]])) {
          # need to calculate ncol (default value=1 may be not good))
          argv["ncol"]=sprintf("(%s).n_elem/(%s)", argv[1], argv["nrow"])
       }
-      if (allarg[["byrow"]]) {
+      if (!is.null(marg[["byrow"]])) {
          # inverse nrow and ncol, then transpose the matrix
          tmp=argv["nrow"]
          argv["nrow"]=argv["ncol"]
@@ -976,7 +966,7 @@ st2arma=function(
          fa[[1]]=sprintf("conv_to<mat>::from(%s)", fa[[1]])
       }
       #r_pref=if (substr(s1, 1, 1) == "r") "" else "Rcpp::" # generator is not from R::
-      r_pref=""
+      r_pref="(vec) "
       postf="" #if (dims[[1]][[1]] == "1") "[0]" else ""
       res=sprintf("%s%s(%s)%s", r_pref, s1, paste(fa, sep="", collapse=", "), postf)
       return(res)
@@ -1072,7 +1062,7 @@ get_vartype=function(obj) {
 #' @return a named vector with rcpp and arma part of declarations
 get_decl=function(t, d) {
    # as scalar, vector or matrix.
-   # t is a three element vector, d is a vector of symbolic dimensions
+   # t is a three element vector as returned by get_vartype(), d is a vector of symbolic dimensions
    # or a string "s", "v" or "m"
    if (t["r"] %in% c("character", "numeric", "double", "integer", "logical", "S4")) {
       if (length(d) > 1L || d == "m") {
@@ -1126,7 +1116,7 @@ get_decl=function(t, d) {
 #' @return A list with of assignment statements inside \code{st}
 get_assign=function(st) {
    # go through the tree of statments to gather and return assignements and
-   # for loop begining
+   # for/while loop begining
    if (!is.call(st)) {
       return(list())
    }
@@ -1135,7 +1125,11 @@ get_assign=function(st) {
       return(c(get_assign(st[[3]]), list(st)))
    }
    if (s == "for") {
-      res=append(list(st[1:3]), get_assign(st[[4L]]))
+      res=append(list(st[1L:3L]), get_assign(st[[4L]]))
+      return(res)
+   }
+   if (s == "while") {
+      res=append(list(st[1L:2L]), get_assign(st[[3L]]))
       return(res)
    }
    if (s == "if") {
