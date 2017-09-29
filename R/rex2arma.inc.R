@@ -317,7 +317,6 @@ rsca2csca=c(integer="int", double="double", logical="bool")
 
 # function that translates just by name, i.e. the arguments are passed trough as they are
 call2a=as.environment(list("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
-   "ceiling"="arma::ceil", "floor"="arma::floor", "round"="arma::round", "trunc"="arma::trunc",
    "which.min"="which_min", "which.max"="which_max",
    "Re"="real", "Im"="imag", "integer"="ivec", "double"="vec"))
 st2arma=function(
@@ -350,8 +349,36 @@ st2arma=function(
       }
       return(s1)
    }
-   
+   # hereafter, st is a call
+   s1=as.character(st[[1L]])
 #browser()
+   # jump control
+   if (s1 == "break")
+      return(s1)
+   if (s1 == "next")
+      return("continue")
+#browser()
+   lenst=length(st)
+   # prepare argv
+   if (s1 == "{") {
+      argv=sapply(st[-1L], st2arma, call2arma, indent, iftern, env, ...)
+      argv=sub("^([^ ]+)", sprintf("%s\\1", indent), argv) # indent the code which is not yet
+      argv=sub("^$", indent, argv)
+   } else if (s1 == "[") {
+      argv=sapply(st[-1L], st2arma, call2arma, "", iftern=TRUE, env, ...)
+   } else if (s1 == "=" || s1 == "<-") {
+      argv=c(st2arma(st[[2L]], call2arma, indent, iftern, env, ...),
+         st2arma(st[[3L]], call2arma, indent, iftern=TRUE, env, ...))
+   } else {
+      # put arguments in the order of the function definition
+      argv=sapply(as.list(match.call(args(s1), st))[-1L], st2arma, call2arma, sprintf("%s   ", indent), iftern, env, ...)
+   }
+   nms=names(argv)
+   if (!is.null(nms)) {
+      i=nchar(nms) > 0L
+      nms[i]=sprintf('_["%s"]=', gsub('(["\\])', '\\\\\\1', nms[i]))
+   }
+   # argv is ready, we can modify s1 for '::' calls and suppress nms for other cases
    if (is.call(st[[1L]]) && as.character(st[[1L]][[1L]]) == "::") {
       s1=sprintf("%s_%s_r_", as.character(st[[1L]][[2L]]), as.character(st[[1L]][[3L]]))
    } else {
@@ -370,26 +397,11 @@ st2arma=function(
                }
             }
          }
+      } else if (!(s1 %in% c("c", "list"))) {
+         nms=NULL
       }
    }
-   # jump control
-   if (s1 == "break")
-      return(s1)
-   if (s1 == "next")
-      return("continue")
-#browser()
-   lenst=length(st)
-   if (s1 == "{") {
-      argv=sapply(st[-1L], st2arma, call2arma, indent, iftern, env, ...)
-      argv=sub("^([^ ]+)", sprintf("%s\\1", indent), argv) # indent the code which is not yet
-      argv=sub("^$", indent, argv)
-   } else if (s1 == "=" || s1 == "<-") {
-      argv=c(st2arma(st[[2L]], call2arma, indent, iftern, env, ...),
-         st2arma(st[[3L]], call2arma, indent, iftern=TRUE, env, ...))
-   } else {
-      # put arguments in the order of the function definition
-      argv=sapply(as.list(match.call(args(s1), st))[-1L], st2arma, call2arma, sprintf("%s   ", indent), iftern, env, ...)
-   }
+
    # trim spaces for arguments of "if" and "="
    if (s1 %in% c("=", "<-", "if", "for", "while")) {
       argv=sapply(argv, sub, pattern="^\\s*", replacement="")
@@ -413,18 +425,12 @@ st2arma=function(
          return(sprintf("%s%s=%s", indent, argv[1L], argv[2L]))
       }
    }
-   nms=names(argv)
-   if (!is.null(nms)) {
-      i=nchar(nms) > 0L
-      nms[i]=sprintf('_["%s"]=', gsub('(["\\])', '\\\\\\1', nms[i]))
-   }
    # data/code control
    if (s1 == "(") {
       # parenthesis operations
       return(sprintf("(%s)", argv[1L]))
    }
    if (s1 == "[") {
-#browser()
       # indexing operations, decrement by 1
       inu=sapply(st[-(1:2)], is.numeric)
       isy=sapply(st[-(1:2)], is.symbol)
@@ -440,8 +446,10 @@ st2arma=function(
             stop(sprintf("Index by matrix in an array '%s' is not yet implemented.", format1(st)))
          }
       } else {
+#if (length(argv) > 1) browser()
          # [row,col] access
-         argv[!inu]=ifelse(isca[!inu], sprintf("(%s)-1", argv[!inu]), sprintf("conv_to<uvec>::from(%s)-1", argv[!inu]))
+         iconv=!inu & argv!=""
+         argv[iconv]=ifelse(isca[iconv], sprintf("(%s)-1", argv[iconv]), sprintf("conv_to<uvec>::from(%s)-1", argv[iconv]))
          if (any(inu))
             argv[inu]=sapply(which(inu)+2, getElement, object=st)-1
          argv[argv==""]="span()"
@@ -450,8 +458,8 @@ st2arma=function(
             b=st[[i+2L]][[2L]]
             e=st[[i+2L]][[3L]]
             argv[i]=sprintf("span(%s,%s)",
-               if (is.numeric(b)) b-1L else paste(b,1,sep="-"),
-               if (is.numeric(e)) e-1L else paste(e,1,sep="-")
+               if (is.numeric(b)) b-1L else sprintf("(%s)-1", b),
+               if (is.numeric(e)) e-1L else sprintf("(%s)-1", e)
             )
          }
          #return(sprintf("vectorise(%s(%s))", s1, paste(argv, collapse=", ")))
@@ -703,6 +711,7 @@ st2arma=function(
          return(sprintf("as<%svec>(c_r_(%s))", rtype2rcpparma(typeof(obj))["arma"], paste(nms, argv, sep="", collapse=", ")))
    }
    
+   # data conversion/construction
    if (s1 %in% c("c", "as.numeric", "as.double", "as.integer") && lenst == 2L) {
 #browser()
       # vectorization of a single argument
@@ -789,6 +798,7 @@ st2arma=function(
       return(res)
    }
    if (s1 == "list") {
+#browser()
       # convert vec in argv to NumericVector
       argconv=sapply(seq_along(argv), function(i) if (lens[i] > 1L || dims[[i]][1L]=="1") argv[i] else sprintf("NumericVector(%s.begin(), %s.end())", argv[i], argv[i]))
       return(sprintf("List::create(%s)", paste(nms, argconv, sep="", collapse=", ")))
@@ -806,6 +816,8 @@ st2arma=function(
       }
       each=if ("each" %in% names(marg)) argv["each"] else "1"
       if (lenst <= 4 && length(dims[[1]]) == 1) {
+         if (!is.symbol(marg["x"]))
+            argv["x"]=sprintf("vec(%s)", argv["x"])
          return(sprintf("_rex_arma_rep(%s, %s, %s)", argv["x"], times, each))
       }
       t=typeof(obj)
@@ -884,7 +896,7 @@ st2arma=function(
          }
       }
    }
-   
+   # get info about data
    if (s1 == "nrow") {
       if (is.symbol(st[[2]])) {
          return(sprintf("%s.n_rows", argv[1L]))
@@ -910,6 +922,13 @@ st2arma=function(
       return(sprintf("(%s).t()", argv[1L]))
    }
    
+   # maths
+   # distinct scalar/vector functions of alone argument
+   if (s1 %in% c("ceiling", "floor", "round", "trunc")) {
+      if (s1 == "ceiling")
+         s1="ceil"
+      return(sprintf("%s::%s(%s)", if (dims[[1]] == "1") "std" else "arma", s1, argv[1L]))
+   }
    # needing argument conversion functions
    if (s1 == "norm") {
       if (lenst == 2L) {
@@ -931,12 +950,14 @@ st2arma=function(
    if (s1 == "solve") {
       return(sprintf("solve(%s, solve_opts::fast)", paste0(argv, collapse=", ")))
    }
+   # print
    if (s1 == "print") {
       if (lens[1L] == 1 && dims[[1]] == "1") {
          return(sprintf('%sRcout << "%s=" << %s << endl;\n', indent, argv[1L], argv[1L]))
       }
       return(sprintf('%s%s.print(Rcout, "%s=");\n', indent, argv[1L], argv[1L]))
    }
+   # stats
    # probability functions
    if (nchar(s1) > 1 && any(substr(s1, 1, 1) == c("d", "p", "q", "r")) && any(substring(s1, 2) == c("gamma", "exp", "norm", "beta", "cauchy", "chisq", "geom", "f", "hyper", "lnorm", "multinom", "nbinom", "pois", "t", "unif", "weibull", "signrank", "tukey", "wilcox"))) {
 #browser()

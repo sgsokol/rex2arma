@@ -4,9 +4,10 @@
 \alias{rex2arma}
 \title{Translate a (simple) R code to RcppArmadillo code.}
 \usage{
-rex2arma(text, fname = if (is.function(text)) sprintf("\%s_arma_",
-  as.character(substitute(text))) else "rex_arma_", exec = TRUE,
-  copy = TRUE, rebuild = FALSE, inpvars = NULL, outvars = NULL)
+rex2arma(text, fname = if (is.function(text) && is.symbol(substitute(text)))
+  sprintf("\%s_arma_", deparse(substitute(text))) else "rex_arma_", exec = 0,
+  copy = TRUE, rebuild = FALSE, inpvars = NULL, outvars = NULL,
+  verbose = FALSE, includes = character())
 }
 \arguments{
 \item{text}{A string with a code or an R expression
@@ -15,7 +16,7 @@ or an R function or a plain code.}
 \item{fname}{A string with a name for Rcpp function (if NULL,
 default to rex_arma_)}
 
-\item{exec}{A logical or integer from {1, 2} (default TRUE).}
+\item{exec}{An integer from {-1, 0, 1, 2} (default 1).}
 
 \item{copy}{A logical saying to make or not a local copy of input
 vectors/matrices (default TRUE, i.e. make a copy).}
@@ -41,12 +42,16 @@ Translate a (simple) R code to RcppArmadillo code.
 If the \code{text} is a string it is parsed. If not, it must
 be a valid R expression or a function or a plain code (cf. Examples).
 
-If \code{exec==FALSE}, the RcppArmadillo code is not executed
-it is just returned as a string.
-If \code{exec==1}, the Rcpp function is created in the calling
- environment but not executed.
-If \code{exec==2} or \code{TRUE}, than the c++ function is called too
- and its output is returned as the result of rex2arma() call.
+If \enumerate{
+ \item \code{exec==0}: (default) the full RcppArmadillo code is not executed
+   it is just returned as a string;
+ \item \code{exec==-1}: the same as 0 but only translated code is returned,
+   i.e. without preamble, includes and Rcpp call;
+ \item \code{exec==1}: the Rcpp function is created in the calling
+   environment but not executed.
+ \item \code{exec==2}: the c++ function is created and called too.
+   Its output is returned as the result of rex2arma() call.
+}
 
 If \code{copy==TRUE}, objects inside the cpp code are created
 with memory copying.
@@ -114,20 +119,20 @@ Rcpp / Armadillo types:
 \examples{
 a=1:3; b=a+3; # NB. Inputs a and b are defined before a call to rex2arma()
 # \\code{text} is a string:
-code=rex2arma("a+b", exec=F)
+code=rex2arma("a+b", exec=0)
 cat(code);
 
 # \\code{text} is a function
 f=function(a, b) a+b
-code=rex2arma(f, exec=F)
+code=rex2arma(f, exec=0)
 
 # \\code{text} is a plain R code
-code=rex2arma(a+b, exec=F)
-code=rex2arma({inner=a\%*\%b; outer=a\%o\%b}, exec=F)
+code=rex2arma(a+b, exec=0)
+code=rex2arma({inner=a\%*\%b; outer=a\%o\%b}, exec=0)
 
 # \\code{text} is an expression
 e=parse(text="{s=a+b; d=a-b}")
-code=rex2arma(e, exec=F)
+code=rex2arma(e, exec=0)
 
 # to execute the produced code:
 (result=eval(parse(text=code)))

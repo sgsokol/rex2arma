@@ -36,5 +36,8 @@ Maintainer: Who to complain to <yourfault@somewhere.net>
 ~~ \code{\link[<pkg>:<pkg>-package]{<pkg>}} ~~
 }
 \examples{
-~~ simple examples of the most important functions ~~
+    x=double(3) # make x a short vector of reals for prototyping
+    vadd_one=function(x) x+1
+    code=rex2arma(vadd_one, exec=0)
+    cat(code)
 }

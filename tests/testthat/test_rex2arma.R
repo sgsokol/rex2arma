@@ -1,6 +1,8 @@
 #browser()
 rebuild <<- FALSE
 exec <<- 2 # convert to C++, execute it and return its result
+verbose <<- FALSE
+library(rex2arma)
 context("simple expressions")
 n <<- 1L
 x <<- 2.5
@@ -24,9 +26,7 @@ cases=alist(
 for (nm in names(cases)) {
    e=cases[[nm]]
    te=deparse(e)
-   test_that(nm, {
-      expect_equal(c(rex2arma(te, r=rebuild, exec=exec, verbose=TRUE)), c(eval(e)), label=te)
-   })
+   expect_equal(c(rex2arma(te, r=rebuild, exec=exec, verbose=verbose)), c(eval(e)), info=paste0("translating '", te, "'", collapse=""))
 }
 
 # binary ops

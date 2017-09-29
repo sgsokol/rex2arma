@@ -412,6 +412,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
 #browser()
       # heart part: add a line of cpp code (outs are already declared)
       if (ret == "") {
+#browser()
          code=sprintf("%s%s;\n", code, st2arma(st, indent=indent, iftern=FALSE, env=probenv, dim_tab=var_dims))
       }
    }

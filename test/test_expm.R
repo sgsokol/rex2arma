@@ -1,12 +1,14 @@
 # test rex2arma() on a real word example, a function calculating
 # matrix exponential: expm.Higham08()
 
-require(rbenchmark)
-require(RcppKalman)
-require(expm)
+library(rbenchmark)
+library(RcppKalman)
+library(expm)
 #source("../rex2arma.inc.R"); source("../rex2arma.R")
 #require(Rcpp, lib="~/.R/library")
-require(Rcpp)
+library(Rcpp)
+library(rex2arma, lib="~/.R/library")
+library(rbenchmark)
 
 
 
@@ -31,8 +33,6 @@ require(Rcpp)
 
 # get R code
 
-library(rbenchmark)
-library(expm) # for balance()
 source("expm.higham.R") # create expm.higham() function
 
 # translate it in C++ expm_cpp() function

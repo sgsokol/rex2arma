@@ -90,7 +90,7 @@ cppFunction(code=src, depends="RcppArmadillo")
 
 
 fastLmPureDotCall <- function(X, y) {
-    .Call("RcppArmadillo_fastLm", X, y, PACKAGE = "RcppArmadillo")
+    .Call("_RcppArmadillo_fastLm_impl", X, y, PACKAGE = "RcppArmadillo")
 }
 
 # pure R solution which will be automatically converted to RcppArmadillo code
@@ -110,7 +110,7 @@ frm <- formula(log(Volume) ~ log(Girth))
 require(MASS) # for ginv in fastLm_r
 
 # rex2arma solution
-source("rex2arma.R")
+library("rex2arma")
 code=rex2arma(fastLm_r, fname="fastLm_rex", exec=1)
 code=rex2arma(fastLm_r, fname="fastLm_rex_nocopy", exec=1, copy=F, rebuild=T)
 # if exec=T, fastLm_rex is created and called, its result is returned as the result of rex2arma()
