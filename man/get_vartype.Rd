@@ -7,9 +7,7 @@
 get_vartype(obj)
 }
 \arguments{
-\item{var}{An R object}
-
-\item{env}{An R environment}
+\item{obj}{An R object}
 }
 \value{
 the same as \code{\link{rtype2rcpparma}}

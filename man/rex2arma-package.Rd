@@ -1,43 +1,39 @@
 \name{rex2arma-package}
 \alias{rex2arma-package}
-\alias{rex2arma}
 \docType{package}
 \title{
-What the package does (short line)
-~~ package title ~~
+    Convert R Expressions to RcppArmadillo Code
 }
 \description{
-More about what it does (maybe more than one line)
-~~ A concise (1-5 lines) description of the package ~~
+    Automatic conversion of basic R code (straightforward mathematical formulas and alike) into RcppArmadillo code.
 }
 \details{
-\tabular{ll}{
-Package: \tab rex2arma\cr
-Type: \tab Package\cr
-Version: \tab 1.0\cr
-Date: \tab 2014-11-27\cr
-License: \tab What license is it under?\cr
-}
-~~ An overview of how to use the package, including the most important ~~
-~~ functions ~~
+    \tabular{ll}{
+        Package: \tab rex2arma\cr
+        Type: \tab Package\cr
+        Version: \tab 0.7.1\cr
+        Date: \tab 2023-04-20\cr
+        License: \tab GPL (==2)\cr
+    }
+Principal function is rex2arma().
+    Few examples are provided in \code{Sys.glob(file.path(system.file("examples", package="rex2arma"), "ex_*.R"))}
 }
 \author{
-Who wrote it
+    Author: Serguei Sokol
 
-Maintainer: Who to complain to <yourfault@somewhere.net>
-~~ The author and/or maintainer of the package ~~
+    Maintainer: <sokol@insa-toulouse.fr>
 }
-\references{
-~~ Literature or other references for background information ~~
-}
-\keyword{ package }
+\keyword{ automatic code translation }
 \seealso{
-~~ Optional links to other man pages, e.g. ~~
-~~ \code{\link[<pkg>:<pkg>-package]{<pkg>}} ~~
+    \code{\link[Rcpp:Rcpp-package]{Rcpp}}
 }
 \examples{
-    x=double(3) # make x a short vector of reals for prototyping
+    x=rnorm(3) # make x a short vector of reals for prototyping
     vadd_one=function(x) x+1
     code=rex2arma(vadd_one, exec=0)
     cat(code)
+    
+    # or directly
+    #cat(rex2arma("x+1", fname="vadd_one_bis", exec=1)) # commented for time saving during tests
+    #vadd_one_bis(1:10)
 }

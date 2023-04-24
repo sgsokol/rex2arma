@@ -2,12 +2,22 @@
 % Please edit documentation in R/rex2arma.R
 \name{rex2arma}
 \alias{rex2arma}
-\title{Translate a (simple) R code to RcppArmadillo code.}
+\title{R Expression to RcppArmadillo}
 \usage{
-rex2arma(text, fname = if (is.function(text) && is.symbol(substitute(text)))
-  sprintf("\%s_arma_", deparse(substitute(text))) else "rex_arma_", exec = 0,
-  copy = TRUE, rebuild = FALSE, inpvars = NULL, outvars = NULL,
-  verbose = FALSE, includes = character())
+rex2arma(
+  text,
+  fname = if (is.function(text) && is.symbol(substitute(text))) sprintf("\%s_arma_",
+    deparse(substitute(text))) else "rex_arma_",
+  exec = 0,
+  copy = TRUE,
+  rebuild = FALSE,
+  inpvars = NULL,
+  outvars = NULL,
+  verbose = FALSE,
+  includes = character(),
+  call2a = rex2arma::call2a,
+  envir = parent.frame()
+)
 }
 \arguments{
 \item{text}{A string with a code or an R expression
@@ -16,7 +26,7 @@ or an R function or a plain code.}
 \item{fname}{A string with a name for Rcpp function (if NULL,
 default to rex_arma_)}
 
-\item{exec}{An integer from {-1, 0, 1, 2} (default 1).}
+\item{exec}{An integer from {-1, 0, 1, 2} (default 0).}
 
 \item{copy}{A logical saying to make or not a local copy of input
 vectors/matrices (default TRUE, i.e. make a copy).}
@@ -30,6 +40,15 @@ vectors/matrices (default TRUE, i.e. make a copy).}
 \item{outvars}{A character vector with names of output variables.
 If there are many, they are put in a list. If \code{outvars} is named,
 The names are used for naming returned list items.}
+
+\item{verbose}{Logical scalar. It also  passed through to the Rcpp:sourceCppp() call.}
+
+\item{includes}{Character vector containing code included in generated
+C++ code before the targeted function.}
+
+\item{call2a}{An environment defining translation of R functions to C++ ones.}
+
+\item{envir}{An environment where variable for parameter prototyping lives.}
 }
 \value{
 a string with generated code or the result of calculation
@@ -118,24 +137,24 @@ Rcpp / Armadillo types:
 
 \examples{
 a=1:3; b=a+3; # NB. Inputs a and b are defined before a call to rex2arma()
-# \\code{text} is a string:
+# \code{text} is a string:
 code=rex2arma("a+b", exec=0)
 cat(code);
 
-# \\code{text} is a function
+# \code{text} is a function
 f=function(a, b) a+b
 code=rex2arma(f, exec=0)
 
-# \\code{text} is a plain R code
+# \code{text} is a plain R code
 code=rex2arma(a+b, exec=0)
 code=rex2arma({inner=a\%*\%b; outer=a\%o\%b}, exec=0)
 
-# \\code{text} is an expression
+# \code{text} is an expression
 e=parse(text="{s=a+b; d=a-b}")
 code=rex2arma(e, exec=0)
 
 # to execute the produced code:
-(result=eval(parse(text=code)))
+#(result=eval(parse(text=code)))
 # or simply
-(result=rex2arma("a+b"))
+#(result=rex2arma("a+b", exec=2))
 }

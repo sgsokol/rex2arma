@@ -1,13 +1,9 @@
 # test rex2arma() on a real word example, a function calculating
 # matrix exponential: expm.Higham08()
 
-library(rbenchmark)
-library(RcppKalman)
-library(expm)
-#source("../rex2arma.inc.R"); source("../rex2arma.R")
-#require(Rcpp, lib="~/.R/library")
+library(expm) # for balance()
 library(Rcpp)
-library(rex2arma, lib="~/.R/library")
+library(rex2arma)
 library(rbenchmark)
 
 
@@ -33,7 +29,7 @@ library(rbenchmark)
 
 # get R code
 
-source("expm.higham.R") # create expm.higham() function
+source(system.file("examples", "expm.higham.R", package = "rex2arma")) # create expm.higham() function
 
 # translate it in C++ expm_cpp() function
 A=diag(2) # just examples of two input parameters
@@ -55,13 +51,11 @@ print(benchmark(
    expm.higham(As, balancing=FALSE),
    expm_cpp(As, balancing=TRUE),
    expm_cpp(As, balancing=FALSE),
-   RcppKalman::expm(As),
    replications=500,
    order="relative"
 )[,1:4])
 stopifnot(diff(range(expm.higham(As, balancing=TRUE)-expm_cpp(As, balancing=TRUE))) < 1.e-13)
 stopifnot(diff(range(expm.higham(As, balancing=FALSE)-expm_cpp(As, balancing=FALSE))) < 1.e-13)
-stopifnot(diff(range(expm.higham(As, balancing=FALSE)-RcppKalman::expm(As))) < 1.e-13)
 
 # medium
 n=50
@@ -72,12 +66,11 @@ print(benchmark(
    expm.higham(As, balancing=FALSE),
    expm_cpp(As, balancing=TRUE),
    expm_cpp(As, balancing=FALSE),
-   RcppKalman::expm(As),
+   #RcppKalman::expm(As),
    order="relative"
 )[,1:4])
 stopifnot(diff(range(expm.higham(As, balancing=TRUE)-expm_cpp(As, balancing=TRUE))) < 1.e-11)
 stopifnot(diff(range(expm.higham(As, balancing=FALSE)-expm_cpp(As, balancing=FALSE))) < 1.e-11)
-stopifnot(diff(range(expm.higham(As, balancing=FALSE)-RcppKalman::expm(As))) < 1.e-9)
 
 # large
 n=500
@@ -88,10 +81,9 @@ print(benchmark(
    expm.higham(As, balancing=FALSE),
    expm_cpp(As, balancing=TRUE),
    expm_cpp(As, balancing=FALSE),
-   RcppKalman::expm(As),
+   #RcppKalman::expm(As),
    replications=5,
    order="relative"
 )[,1:4])
 stopifnot(diff(range(expm.higham(As, balancing=TRUE)-expm_cpp(As, balancing=TRUE))) < 1.e-14)
 stopifnot(diff(range(expm.higham(As, balancing=FALSE)-expm_cpp(As, balancing=FALSE))) < 1.e-14)
-stopifnot(diff(range(expm.higham(As, balancing=FALSE)-RcppKalman::expm(As))) < 2.e-4)

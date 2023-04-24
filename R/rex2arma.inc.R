@@ -21,7 +21,7 @@
 #' lapply(parse(t="x <- a%*%(b+c); y=a+b"), symdim)
 #' # or
 #' symdim(expression(x <- a%*%(b+c))[[1L]])
-
+#' @export
 symdim=function(st, env=parent.frame(), dim_tab=NULL) {
 #browser()
    if (is.null(st)) {
@@ -172,7 +172,7 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
       }
       return(dims[[1L]])
    }
-   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "min", "max", "sd", "norm", "identical", "&&", "||") || startsWith(s1, "is.")) {
+   if (s1 %in% c("sum", "prod", "nrow", "ncol", "length", "mean", "median", "min", "max", "sd", "norm", "identical", "&&", "||") || startsWith(s1, "is.")) {
       # reducing to scalar functions
       return("1")
    }
@@ -296,17 +296,27 @@ symdim=function(st, env=parent.frame(), dim_tab=NULL) {
    return(res)
 }
 
-# translate R scalar types to C scalar types
+#' translation table just by name, i.e. the arguments are passed trough as they are
+#' @export
+call2a=as.environment(list("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
+   "which.min"="which_min", "which.max"="which_max",
+   "Re"="real", "Im"="imag", "integer"="ivec", "double"="vec", "median"="arma::median"))
+
+#' translate R scalar types to C scalar types
+#' 
+#' @export
 rsca2csca=c(integer="int", double="double", logical="bool")
+
 #' Translate an elementary R statement to RcppArmadillo
 #'
 #' @param st A statement to transalte
-#' @param call2a A named character vector giving Armadillo equivalence
-#'  for some R functions. It is indexed by R function names.
+#' @param call2arma An environment used as modifiable dictionary and giving
+#'  Armadillo equivalence
+#'  for some R functions. Entries are R function names to be translated.
 #' @param indent A character string used as indentation. It is incremented
 #'  by "   " (3 spaces) inside a \code{{...}} block.
 #' @param iftern A logical indicating whether \code{if/else} must be
-#'  considered as a ternary operator (TRUE) or a classical \code{if/else}
+#'  considered as a ternary operator (TRUE) or as a classical \code{if/else}
 #'  operator (FALSE).
 #' @param env An environment where statement may be executed.
 #' @param ... Parameters passed through to \code{symdim()} calls.
@@ -315,10 +325,8 @@ rsca2csca=c(integer="int", double="double", logical="bool")
 #' @details
 #' Parameter \code{env} is also passed to \code{symdim()} with \code{...}.
 
-# function that translates just by name, i.e. the arguments are passed trough as they are
-call2a=as.environment(list("qr.solve"="solve", "ginv"="pinv", "^"="pow", "stop"="stop",
-   "which.min"="which_min", "which.max"="which_max",
-   "Re"="real", "Im"="imag", "integer"="ivec", "double"="vec"))
+#' translate statement to arma code
+#' @export
 st2arma=function(
    st,
    call2arma=call2a,
@@ -336,7 +344,7 @@ st2arma=function(
    if (!is.call(st)) {
       s1=as.character(st)
       if (is.character(st)) {
-         return(sprintf('"%s"', gsub('(["\\])', '\\\\\\1', s1)))
+         return(sprintf('std::string("%s")', gsub('(["\\])', '\\\\\\1', s1)))
       }
       if (s1 == "T" || s1 == "TRUE") {
          return("true")
@@ -357,6 +365,8 @@ st2arma=function(
       return(s1)
    if (s1 == "next")
       return("continue")
+   if (s1 == "function")
+      return(""); # function declaration must be treated in rex2arma() call
 #browser()
    lenst=length(st)
    # prepare argv
@@ -371,7 +381,11 @@ st2arma=function(
          st2arma(st[[3L]], call2arma, indent, iftern=TRUE, env, ...))
    } else {
       # put arguments in the order of the function definition
-      argv=sapply(as.list(match.call(args(s1), st))[-1L], st2arma, call2arma, sprintf("%s   ", indent), iftern, env, ...)
+      #suppressMessages(attach(env))
+      #on.exit(detach(env))
+      argv=sapply(as.list(match.call(args(get(s1, envir=env, mode="function")), st))[-1L], st2arma, call2arma, sprintf("%s   ", indent), iftern, env)
+      #detach(env)
+      #on.exit()
    }
    nms=names(argv)
    if (!is.null(nms)) {
@@ -415,7 +429,8 @@ st2arma=function(
          return("")
       }
       svm_r=svm(rhs)
-      if (is.call(st[[3]]) && st[[3]][[1]] != as.symbol("<-") && st[[3]][[1]] != as.symbol("=") && svm_r == "s") {
+      #if (is.call(st[[3]]) && st[[3]][[1]] != as.symbol("<-") && st[[3]][[1]] != as.symbol("=") && svm_r == "s") {
+      if (svm_r == "s") {
          # rhs is a scalar
          lhs=try(eval(st[[2]], envir=env))
          use_fill = !(inherits(lhs, "try-error") || length(lhs) == 1)
@@ -431,9 +446,11 @@ st2arma=function(
       return(sprintf("(%s)", argv[1L]))
    }
    if (s1 == "[") {
+#browser()
       # indexing operations, decrement by 1
       inu=sapply(st[-(1:2)], is.numeric)
       isy=sapply(st[-(1:2)], is.symbol)
+      ilo=sapply(st[-(1:2)], function(e) is.call(e) && deparse(e[[1]]) %in% c(">", "<", ">=", "<=", "==", "!=", "!"))
       dims=lapply(st[-(1:2)], symdim, env, ...)
       isca=sapply(dims, function(d) length(d)==1L && d=="1")
       s1=argv[1L]
@@ -448,10 +465,12 @@ st2arma=function(
       } else {
 #if (length(argv) > 1) browser()
          # [row,col] access
-         iconv=!inu & argv!=""
+         iconv=!inu & argv!="" & !ilo
          argv[iconv]=ifelse(isca[iconv], sprintf("(%s)-1", argv[iconv]), sprintf("conv_to<uvec>::from(%s)-1", argv[iconv]))
          if (any(inu))
             argv[inu]=sapply(which(inu)+2, getElement, object=st)-1
+         if (any(ilo))
+            argv[ilo]=sprintf("find(%s)", argv[ilo])
          argv[argv==""]="span()"
          irange=which(sapply(st[-(1:2)], function(s) is.call(s) && as.character(s[[1L]]) == ":"))
          for (i in irange) {
@@ -463,8 +482,8 @@ st2arma=function(
             )
          }
          #return(sprintf("vectorise(%s(%s))", s1, paste(argv, collapse=", ")))
-         if (is.call(st[[3]]) && deparse(st[[3]][[1]]) %in% c(">", "<", ">=", "<=", "==", "!=", "!"))
-            argv=sprintf("find(%s)", paste(argv, collapse=", "))
+         #if (is.call(st[[3]]) && deparse(st[[3]][[1]]) %in% c(">", "<", ">=", "<=", "==", "!=", "!"))
+         #   argv=sprintf("find(%s)", paste(argv, collapse=", "))
          return(sprintf("%s(%s)", s1, paste(argv, collapse=", ")))
       }
    }
@@ -570,7 +589,7 @@ st2arma=function(
       return(res)
    }
    if (s1 == "ifelse") {
-      return(sprintf("%s ? %s : %s", argv[1L], argv[2L], if (length(argv) < 3) "R_NilValue" else argv[3L]))
+      return(sprintf("((%s) ? (%s) : (%s))", argv[1L], argv[2L], if (length(argv) < 3) "R_NilValue" else argv[3L]))
    }
    if (s1 == "{") {
 #browser()
@@ -987,7 +1006,7 @@ st2arma=function(
          fa[[1]]=sprintf("conv_to<mat>::from(%s)", fa[[1]])
       }
       #r_pref=if (substr(s1, 1, 1) == "r") "" else "Rcpp::" # generator is not from R::
-      r_pref="(vec) "
+      r_pref=if (dims[[1]] == 1) "(double) " else "(vec) "
       postf="" #if (dims[[1]][[1]] == "1") "[0]" else ""
       res=sprintf("%s%s(%s)%s", r_pref, s1, paste(fa, sep="", collapse=", "), postf)
       return(res)
@@ -1020,6 +1039,7 @@ st2arma=function(
 #'
 #' @details
 #' An object is considered as a scalar if it has a length 1.
+#' @export
 svm=function(obj) {
    len=length(obj)
    if (len == 1) {
@@ -1041,6 +1061,7 @@ svm=function(obj) {
 #' @param r A string resulting from \code{typeof()} call
 #' @return A named character vector of length three who's components
 #' are named "r", "rcpp" and "arma".
+#' @export
 rtype2rcpparma=function(r) {
    return(switch(r,
       "environment"=c(r=r, rcpp="Environment", arma=NA),
@@ -1058,11 +1079,11 @@ rtype2rcpparma=function(r) {
 }
 
 #' Get a string for variable declaration in RcppArmadillo code.
-#' @param var An R object
-#' @param env An R environment
+#' @param obj An R object
 #' @return the same as \code{\link{rtype2rcpparma}}
 #' @details
 #' This function is just a wrapper for \code{\link{rtype2rcpparma}}
+#' @export
 get_vartype=function(obj) {
    # return a named character vector of r, rcpp and arma types that can be used in variable declarations
    # together with struct (one of scalar, vector, matrix if applicable)
@@ -1081,6 +1102,7 @@ get_vartype=function(obj) {
 #' @param d A character vector as returned by \code{\link{symdim}} or
 #'  \code{\link{svm}}
 #' @return a named vector with rcpp and arma part of declarations
+#' @export
 get_decl=function(t, d) {
    # as scalar, vector or matrix.
    # t is a three element vector as returned by get_vartype(), d is a vector of symbolic dimensions
@@ -1135,6 +1157,7 @@ get_decl=function(t, d) {
 #'
 #' @param st An R statement
 #' @return A list with of assignment statements inside \code{st}
+#' @export
 get_assign=function(st) {
    # go through the tree of statments to gather and return assignements and
    # for/while loop begining
@@ -1176,6 +1199,7 @@ get_assign=function(st) {
 #'
 #' @param obj An R object
 #' @return A character string of length 1 representing the object \code{obj}
+#' @export
 format1=function(obj) {
    res=if (is.call(obj)) format(obj) else if (is.character(obj)) sprintf("\"%s\"", obj) else as.character(obj)
    if (length(res) > 1L) {
@@ -1188,6 +1212,7 @@ format1=function(obj) {
 #'
 #' @param st An R statement
 #' @return An R statement
+#' @export
 rhs_eq=function(st) {
    if (is.call(st) && (st[[1L]] == as.symbol("<-") || st[[1L]] == as.symbol("="))) {
       return(rhs_eq(st[[3L]]))
@@ -1201,5 +1226,5 @@ rhs_eq=function(st) {
 #' @param nm_c (string) C variable name
 #' @param dc2r (string) named vector of R names (named by C counterparts)
 #' @return A string, R variable name
-
+#' @export
 c2r=function(nm_c, dc2r=dc2r) {nm_r=dc2r[nm_c]; ifelse (is.na(nm_r), nm_c, nm_r)}

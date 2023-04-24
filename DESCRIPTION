@@ -1,16 +1,14 @@
 Package: rex2arma
 Type: Package
-Title: Convertion of R Code to RcppArmadillo Code
-Version: 0.6
-Date: 2017-07-24
+Title: Convert R Code to RcppArmadillo Code
+Version: 0.7.1
+Date: 2023-04-24
 Author: Serguei Sokol
 Maintainer: Serguei Sokol  <sokol@insa-toulouse.fr>
-Description: Automatic conversion of basic R code (linear algebra and alike) into
-    RcppArmadillo code.
-LinkingTo: Rcpp
-SystemRequirements: C++11
+Description: Automatic conversion of basic R code (mathematical formulas and alike) into RcppArmadillo code.
 Imports: methods, utils
 License: GPL-2
 Suggests:
-    testthat
-RoxygenNote: 6.0.1
+    RUnit, Rcpp, RcppArmadillo, expm
+RoxygenNote: 7.2.3
+Encoding: UTF-8

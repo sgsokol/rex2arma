@@ -1,4 +1,8 @@
 #!/usr/bin/r
+
+## this file coming from RcppArmadillo is modified to include testing code produced
+## by rex2arma() from the original pure R solution.
+
 ##
 ## fastLm.r: Benchmarking lm() via RcppArmadillo and directly
 ##
@@ -19,7 +23,7 @@
 ## You should have received a copy of the GNU General Public License
 ## along with RcppArmadillo.  If not, see <http://www.gnu.org/licenses/>.
 
-library(RcppArmadillo)
+library(Rcpp)
 library(rbenchmark)
 
 src <- '
@@ -98,7 +102,7 @@ fastLm_r=function(X, y) {
    df=nrow(X)-ncol(X)
    coef=qr.solve(X, y)
    res=y-c(X%*%coef)
-   s2=(res%*%res)/df
+   s2=as.numeric((res%*%res)/df)
    std_err=sqrt(s2*diag(ginv(t(X)%*%X)))
    return(list("coefficients"=coef, "stderr"=std_err, "df"=df))
 }
@@ -112,17 +116,17 @@ require(MASS) # for ginv in fastLm_r
 # rex2arma solution
 library("rex2arma")
 code=rex2arma(fastLm_r, fname="fastLm_rex", exec=1)
-code=rex2arma(fastLm_r, fname="fastLm_rex_nocopy", exec=1, copy=F, rebuild=T)
-# if exec=T, fastLm_rex is created and called, its result is returned as the result of rex2arma()
-
 # > cat(code) # if you what to see the cpp code of fastLm_rex()
+code=rex2arma(fastLm_r, fname="fastLm_rex_nocopy", exec=1, copy=F, rebuild=T)
+# if exec=2, fastLm_rex is created and called, its result is returned as the result of rex2arma()
+
 
 res <- benchmark(fLmOneCast(X, y),             	# inline'd above
                  fLmTwoCasts(X, y),            	# inline'd above
                  fLmConstRef(X, y),            	# inline'd above
-                 fastLmPure(X, y),              # similar, but with 2 error checks
+                 #fastLmPure(X, y),              # similar, but with 2 error checks
                  fastLmPureDotCall(X, y),       # now without the 2 error checks
-                 fastLm(frm, data=trees),       # using model matrix
+                 #fastLm(frm, data=trees),       # using model matrix
                  lm.fit(X, y),                  # R's fast function, no stderr
                  lm(frm, data=trees),           # R's standard function
                  fastLm_r(X, y),                # pure R function

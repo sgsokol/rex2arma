@@ -1,10 +1,12 @@
+#' R Expression to RcppArmadillo
+#' 
 #' Translate a (simple) R code to RcppArmadillo code.
 #'
 #' @param text A string with a code or an R expression
 #'  or an R function or a plain code.
 #' @param fname A string with a name for Rcpp function (if NULL,
 #'  default to rex_arma_)
-#' @param exec An integer from {-1, 0, 1, 2} (default 1).
+#' @param exec An integer from {-1, 0, 1, 2} (default 0).
 #' @param copy A logical saying to make or not a local copy of input
 #'  vectors/matrices (default TRUE, i.e. make a copy).
 #' @param rebuild A logical saying to rebuild or not previous Rcpp code
@@ -14,6 +16,11 @@
 #' @param outvars A character vector with names of output variables.
 #'  If there are many, they are put in a list. If \code{outvars} is named,
 #'  The names are used for naming returned list items.
+#' @param verbose Logical scalar. It also  passed through to the Rcpp:sourceCppp() call.
+#' @param includes Character vector containing code included in generated
+#'  C++ code before the targeted function.
+#' @param call2a An environment defining translation of R functions to C++ ones.
+#' @param envir An environment where variable for parameter prototyping lives.
 #' @return a string with generated code or the result of calculation
 #'  depending on \code{exec} (cf. Details)
 #'
@@ -74,9 +81,9 @@
 #' code=rex2arma(e, exec=0)
 #'
 #' # to execute the produced code:
-#' (result=eval(parse(text=code)))
+#' #(result=eval(parse(text=code)))
 #' # or simply
-#' (result=rex2arma("a+b"))
+#' #(result=rex2arma("a+b", exec=2))
 
 #' @section Limitations:
 #' \enumerate{
@@ -111,29 +118,26 @@
 #' Rcpp / Armadillo types:
 #' - {Integer,Numeric,Complex,Character}Vector/{ivec,vec,cx_vec,-"-}
 #' - {Integer,Numeric,Complex,Character}Matrix/{imat,mat,cx_mat,-"-}
-
-rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text))) sprintf("%s_arma_", deparse(substitute(text))) else "rex_arma_", exec=0, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL, verbose=FALSE, includes=character()) {
+#' @export
+rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text))) sprintf("%s_arma_", deparse(substitute(text))) else "rex_arma_", exec=0, copy=TRUE, rebuild=FALSE, inpvars=NULL, outvars=NULL, verbose=FALSE, includes=character(), call2a=rex2arma::call2a, envir=parent.frame()) {
 #browser()
    mcall=match.call()
    if (verbose)
       cat("matched call=", format(mcall), "\n", sep="")
    fname=gsub(".", "_", fname, fixed=TRUE)
    verbose=as.logical(verbose)
-   pfenv=parent.frame()
+   pfenv=list2env(as.list(envir, all.names=TRUE), parent=parent.frame())
+   #cat("pfenv:", ls(pfenv), "\n")
    probenv=new.env() # execute statements here to probe typeof(out)
-   dc2r=c() # dictionary of variables having different names inC++ and R, e.g. x.a(R)->x_a(C++)
-   if (!is.null(inpvars)) {
-      # populate probenv with input variables
-      for (it in inpvars) {
-         assign(it, get(it, envir=pfenv), envir=probenv)
-      }
-   }
+   dc2r=c() # dictionary of variables having different names in C++ and R, e.g. x.a(R)->x_a(C++)
+   # populate probenv with input variables
+   probenv=list2env(as.list(pfenv, all.names=TRUE)[inpvars], parent=parent.frame())
    ftype="SEXP"
    e=if (is.function(text)) text else substitute(text)
    retobj=NULL
    if (is.symbol(e)) {
-       e=eval(e, envir=pfenv)
-       retobj=eval(e, envir=pfenv)
+      e=eval(e, envir=pfenv)
+      retobj=eval(e, envir=pfenv)
    }
    if (is.character(e)) {
       e=parse(text=text)
@@ -142,12 +146,15 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    if (is.function(e)) {
       inpvars=sapply(names(formals(e)), gsub, pattern=".", replacement="_", fixed=TRUE)
 #print(call2a)
-      call2a[[fname]] <- fname
+      if (is.function(text) && is.symbol(substitute(text)))
+         call2a[[deparse(substitute(text))]] <- fname
 #print(call2a)
 #stop()
-      retobj=do.call(e, lapply(names(utils::head(as.list(args(e)), -1)), function(a) get(a, envir=pfenv)))
+      #anames=names(utils::head(as.list(args(e)), -1))
+      #retobj=do.call(e, structure(lapply(anames, function(a) get(a, envir=pfenv)), names=anames))
       e=body(e)
-      if (class(e) == "{") {
+      retobj=eval(e, envir=pfenv)
+      if (inherits(e, "{")) {
          e=e[-1L]
       } else {
          e=list(e)
@@ -201,6 +208,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
    lfun_decl=c()
    colnames(var_decl)=c("rcpp", "arma")
    indent="   "
+   fcode=""
    for (i in 1:length(e)) {
       out=c() # c output var in this statement
       ins=c() # c input vars -"-
@@ -246,21 +254,6 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          s1="="
       if (s1 == "return" || i == length(e)) {
 #browser()
-         # if it is the last statement
-         # prepare return
-         ret=st2arma(st, indent=indent, iftern=TRUE, env=probenv, dim_tab=var_dims)
-         if (s1 != "return") {
-            # return just the last expression
-            if (s1 == "=" || s1 == "<-") {
-               ret=sprintf("%s;\n%sreturn %s;\n", ret, indent, st2arma(st[[2]], indent="", iftern=TRUE, env=probenv, dim_tab=var_dims))
-            } else if (s1 == "assign") {
-               ret=sprintf("%s;\n%sreturn %s;\n", ret, indent, st2arma(eval(st[[2]], envir=probenv), indent="", iftern=TRUE, env=probenv, dim_tab=var_dims))
-            } else {
-               ret=sprintf("%sreturn %s;\n", indent, ret)
-            }
-         } else {
-            ret=sprintf("%s%s;\n", indent, ret)
-         }
          # exclude from ins list member with "$"
          isy=which(pada$token=="SYMBOL") # indexes of symbols (i.e. variable names)
          idol=which(pada$token=="'$'") # indexes of dollar sign
@@ -293,6 +286,21 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          # store ins that are not in previous outs neither in inps
          di=setdiff(setdiff(ins, outv), inps)
          inps=c(inps, di)
+         # prepare return
+#browser()
+         ret=st2arma(st, call2arma=call2a, indent=indent, iftern=TRUE, env=probenv, dim_tab=var_dims)
+         if (s1 != "return") {
+            # return just the last expression
+            if (s1 == "=" || s1 == "<-") {
+               ret=sprintf("%s;\n%sreturn %s;\n", ret, indent, st2arma(st[[2]], call2arma=call2a, indent="", iftern=TRUE, env=probenv, dim_tab=var_dims))
+            } else if (s1 == "assign") {
+               ret=sprintf("%s;\n%sreturn %s;\n", ret, indent, st2arma(eval(st[[2]], envir=probenv), call2arma=call2a, indent="", iftern=TRUE, env=probenv, dim_tab=var_dims))
+            } else {
+               ret=sprintf("%sreturn %s;\n", indent, ret)
+            }
+         } else {
+            ret=sprintf("%s%s;\n", indent, ret)
+         }
       }
 #browser()
       #pada=utils::getParseData(parse(text=format1(st)))
@@ -307,11 +315,13 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
          }
          # get ins var
          eq1=as.character(eq[[1L]])
-         rhs_is_fun=length(eq) > 2 && is.call(eq[[3]]) && as.character(eq[[3]][[1]]) == "function"
+         rhs_is_fun=length(eq) > 2 && is.call(eq[[3]]) && as.character(eq[[3]][[1]]) == "function" # fixme: function() can be at the end of assignment chain, not just one "f <- function() ..."
          loc_inps=c(loc_inps, if (rhs_is_fun) names(eq[[3]][[2]]) else c())
          rhsc=if (eq1 == "if" || eq1 == "while") rhs_eq(eq[[2L]]) else rhs_eq(eq[[3L]])
          rhs=format1(rhsc)
-         pada=utils::getParseData(parse(text=rhs, keep.source=TRUE))
+         # get variables which can be used in indexing on the lsh
+         lhsi=if (is.call(st[[2]]) && as.character(st[[2]][[1]]) %in% c("[", "[[")) format1(st[[2]][[3]]) else character(0)
+         pada=utils::getParseData(parse(text=paste(rhs, lhsi, sep=";"), keep.source=TRUE))
          # exclude from ins list member with "$"
          isy=which(pada$token == "SYMBOL")
          idol=which(pada$token == "'$'")
@@ -386,15 +396,15 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
             #eval(parse(text=sprintf("%s=%s", lhsi, if (eq1 == "for") sprintf("(%s)[[1]]", rhs) else rhs)), envir=probenv)
             obj=probenv[[lhsi]]
             is_fun=FALSE
-#browser()
             if (is.function(obj)) {
                is_fun=TRUE
                obj=do.call(obj, lapply(names(utils::head(as.list(args(obj)), -1)), get, envir=probenv))
             }
             if (is_fun) {
-               ret_rex=do.call("rex2arma", c(list(eq[[3]]), exec=-1, fname=out[i], copy=copy, includes=lfun_decl, rebuild=rebuild, verbose=verbose));
+#browser()
+               ret_rex=do.call("rex2arma", list(text=as.symbol(lhsi), exec=-1, fname=out[i], copy=copy, includes=lfun_decl, rebuild=rebuild, verbose=verbose, call2a=call2a, envir=probenv), envir=probenv);
                # really create function for future prob calls
-               do.call("rex2arma", c(list(eq[[3]]), exec=1, fname=out[i], copy=copy, includes=lfun_decl, rebuild=rebuild, verbose=verbose))
+               #do.call("rex2arma", c(list(eq[[3]]), exec=1, fname=out[i], copy=copy, includes=lfun_decl, rebuild=rebuild, verbose=verbose, call2a=call2a, envir=envir))
                lfun_decl=c(lfun_decl, sprintf("%s %s(%s);\n%s",
                   ret_rex["ftype"], ret_rex["fname"], ret_rex["fsig"],
                   ret_rex["fcode"]))
@@ -413,7 +423,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       # heart part: add a line of cpp code (outs are already declared)
       if (ret == "") {
 #browser()
-         code=sprintf("%s%s;\n", code, st2arma(st, indent=indent, iftern=FALSE, env=probenv, dim_tab=var_dims))
+         code=sprintf("%s%s;\n", code, st2arma(st, call2arma=call2a, indent=indent, iftern=FALSE, env=probenv, dim_tab=var_dims))
       }
    }
    if (ret == "") {
@@ -464,15 +474,15 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
 #cat("inps=", inpvars, "\n", sep="")
    
    # gather rcpp code
-   inptype=var_decl[inpvars,,drop=FALSE]
    do_copy= if (copy) "true" else "false"
    if (length(inpvars)) {
+      inptype=var_decl[inpvars,,drop=FALSE]
       iconv=grep("(vec|mat)$", inptype[,"arma"])
       inparma=inptype[iconv,"arma"]
       imat=grep("mat$", inparma)
       ivec=grep("vec$", inparma)
       decl=inpvars[iconv]
-      decl[imat]=sprintf("%s%s %s(%s_in_.begin(), %s_in_.nrow(), %s_in_.ncol(), %s);\n",
+      decl[imat]=sprintf("%s%s %s(%s_in_.begin(), %s_in_.n_rows, %s_in_.n_cols, %s);\n",
          indent, inparma[imat], decl[imat], decl[imat],
          decl[imat], decl[imat], do_copy)
       decl[ivec]=sprintf("%s%s %s(%s_in_.begin(), %s_in_.size(), %s);\n",
@@ -483,7 +493,7 @@ rex2arma=function(text, fname=if (is.function(text) && is.symbol(substitute(text
       ivm=grep("(vec|mat)$", inptype[,"arma"])
       inp_in=inpvars
       inp_in[ivm]=sprintf("%s_in_", inpvars[ivm])
-      sig=paste(inptype[,"rcpp"], inp_in, sep=" ", collapse=",\n ")
+      sig=paste(inptype[,"arma"], inp_in, sep=" ", collapse=",\n ")
    } else {
       decl=sig=""
    }
@@ -539,7 +549,7 @@ Rcpp::sourceCpp(rebuild=%s, \nverbose=%s,\ncode=\"%s\n\")\n",
       # call it with params from the parent frame
       if (verbose)
          cat("rex2arma produced code=", code, "\n", sep="")
-      try(eval(parse(text=code), envir=pfenv), silent=TRUE)
+      eval(parse(text=code), envir=pfenv)
 #if (inherits(.Last.value, "try-error"))
 #   browser()
       res <- try(do.call(fname, lapply(c2r(inpvars, dc2r), get, envir=pfenv), envir=pfenv), silent=TRUE)
